@@ -128,7 +128,38 @@ class LLMService {
     };
   }
 
-  // ==================== 第一层：生成解题步骤 ====================
+  // ==================== 问题分类：判断是否为理科题目 ====================
+  static async classifyInput(userInput) {
+    const systemPrompt = '你是一个输入分类器。判断用户输入是否为数学、物理、化学、几何类题目。是则输出 {"isProblem":true}，否则输出 {"isProblem":false}。只输出JSON。';
+
+    const messages = [{ role: 'user', content: '判断以下输入是否是理科题目（需要分步解题）：\n' + userInput }];
+
+    try {
+      const result = await this.callDeepSeek(messages, systemPrompt, 200);
+      const parsed = this.tryExtractJSON(result);
+      if (parsed && typeof parsed.isProblem === 'boolean') {
+        return parsed.isProblem;
+      }
+      // 简单的本地判断: 包含数学/物理/化学/几何关键词
+      const problemKeywords = ['求', '解', '计算', '证明', '画图', '函数', '方程', '几何', '三角', '面积', '体积',
+        '速度', '力', '电场', '磁场', '化学', '晶胞', '反应', '质量', '浓度', '向量', '导数', '积分', '概率',
+        'x', 'y', '=', '°', '℃', 'sin', 'cos', 'tan', 'log', 'dx'];
+      return problemKeywords.some(k => userInput.toLowerCase().includes(k.toLowerCase()));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // ==================== 简单对话回复 ====================
+  static async simpleChat(context, userInput) {
+    const systemPrompt = '你是一个AI解题助手。用友好的口吻回复用户的一般性问题，引导用户提出需要解答的数学/科学问题。回复不超过3句话。';
+
+    const messages = [
+      { role: 'user', content: `${context ? '上下文：\n' + context + '\n\n' : ''}用户说：${userInput}` }
+    ];
+
+    return await this.callDeepSeek(messages, systemPrompt, 300);
+  }
   static async firstLayerLLM(context, userInput) {
     const systemPrompt = [
       '你是一位资深理科教师。给出详尽、准确、无幻觉的解题过程。',
@@ -139,22 +170,26 @@ class LLMService {
       '3. 不确定时列出多种可能并说明适用条件',
 
       '## 步骤格式',
-      '每步 description 包含四段（简洁扼要，不要过长）：',
+      '每步 description 包含四段，每段之间用 \\n\\n 双换行分隔使显示清晰：',
       '① 目标（一行）',
-      '② 依据',
-      '③ 计算过程（只列关键推导，不要逐行展开每个代数变换）',
-      '④ 结果',
+      '② 依据（一行，引用定理/公式名）',
+      '③ 计算过程（2-5行，每行不超过30字，关键步骤间用换行分隔）',
+      '④ 结果（一行）',
 
-      '**长度控制：每个步骤的 description 总共不超过150字。summary 不超过80字。**',
+      '**长度控制：每个步骤的 description 总共不超过200字。summary 不超过80字。**',
+      '**每段之间必须用 \\n\\n 双换行分隔，确保网页显示有合适间距。**',
 
       '## 图像决策',
       '以下情况 needImage=true：',
-      '- 函数图像（一次/二次/指数/对数/三角）→ MATH_STATIC_EQUATION',
-      '- 几何/空间图形（平面几何/立体几何/向量/坐标系）→ MATH_STATIC_ABSTRACT',
-      '- 动态过程（动点轨迹/图形变换）→ MATH_DYNAMIC_GEOMETRY',
-      '- 物理运动/力学 → PHYSICS_ENGINE',
-      '- 化学晶胞/分子结构 → CHEMISTRY_CRYSTAL',
-      '仅纯代数运算/纯逻辑推理时 needImage=false。默认优先生成图。',
+      '- 函数图像（一次/二次/指数/对数/三角/幂/绝对值/分段）→ MATH_STATIC_EQUATION',
+      '- 几何/空间图形（平面几何/立体几何/向量/坐标系/解析几何/截面）→ MATH_STATIC_ABSTRACT',
+      '- 动态过程（动点轨迹/图形变换/函数平移伸缩/旋转体）→ MATH_DYNAMIC_GEOMETRY',
+      '- 物理运动/力学/电路/光路 → PHYSICS_ENGINE',
+      '- 化学晶胞/分子结构/反应装置 → CHEMISTRY_CRYSTAL',
+      '- 坐标系中画点/线/面/向量 → MATH_STATIC_EQUATION',
+      '- 不等式区域/线性规划可行域 → MATH_STATIC_EQUATION',
+      '- 数列图像/散点图 → MATH_STATIC_EQUATION',
+      '仅纯代数运算/纯文字逻辑推理时 needImage=false。默认优先生成图。',
 
       '## 输出',
       '纯JSON，不要markdown包裹。',
@@ -205,15 +240,22 @@ class LLMService {
 
   // ==================== 第二层：生成绘图代码 ====================
   static async secondLayerLLM(stepDescription, imageType) {
-    if (imageType === 'MATH_STATIC_ABSTRACT' || imageType === 'MATH_DYNAMIC_GEOMETRY') {
+    console.log('[secondLayerLLM] imageType:', imageType);
+    // MATH_STATIC_ABSTRACT → 3D 几何体
+    if (imageType === 'MATH_STATIC_ABSTRACT') {
       return this.extractGeometryParams(stepDescription, imageType);
-    } else {
-      return this.extractFunctionParams(stepDescription, imageType);
     }
+    // MATH_DYNAMIC_GEOMETRY → 动图（用函数动画模板）
+    if (imageType === 'MATH_DYNAMIC_GEOMETRY') {
+      return this.extractAnimationParams(stepDescription);
+    }
+    // 其余类型（MATH_STATIC_EQUATION / CHEMISTRY_CRYSTAL / PHYSICS_ENGINE）→ 函数参数
+    return this.extractFunctionParams(stepDescription, imageType);
   }
 
   // ==================== 提取几何参数 ====================
   static async extractGeometryParams(stepDescription, imageType) {
+    console.log('[extractGeometryParams] imageType:', imageType, 'desc:', stepDescription?.substring(0, 100));
     const systemPrompt = [
       '你是一个几何/3D建模参数提取专家。请根据题目描述精确提取绘图参数。',
       '',
@@ -249,7 +291,9 @@ class LLMService {
     ].join('\n');
 
     const messages = [{ role: 'user', content: userPrompt }];
+    console.log('[extractGeometryParams] Calling DeepSeek...');
     const result = await this.callDeepSeek(messages, systemPrompt);
+    console.log('[extractGeometryParams] Raw response:', result?.substring(0, 400));
 
     try {
       const jsonMatch = result.match(/\{[\s\S]*\}/);
@@ -257,9 +301,9 @@ class LLMService {
         const params = JSON.parse(jsonMatch[0]);
         return this.generateGeometryCode(params, imageType);
       }
-      return JSON.parse(result);
+      throw new Error('No JSON found in geometry params response');
     } catch (parseError) {
-      console.error('几何参数解析失败:', parseError.message);
+      console.error('几何参数解析失败:', parseError.message, '原始响应:', result?.substring(0, 300));
       return this.generateGeometryCode({
         title: '几何图形',
         points: [
@@ -283,8 +327,9 @@ class LLMService {
       '准则：',
       '1. 仅基于题目给出的函数/数据提取参数',
       '2. 方程表达式使用Python/numpy语法（如 y = x**2, y = np.sin(x), y = np.exp(x)）',
-      '3. 坐标范围要能清晰展示函数的关键特征（交点、极值点、渐近线等）',
-      '4. 输出仅包含JSON对象，无其他文字',
+      '3. 坐标范围要能清晰展示函数的所有关键特征（零点、极值、渐近线、对称轴、顶点、交点），必要时扩大范围',
+      '4. 对复杂曲线（参数方程、隐函数、分段函数、极坐标），必须提取完整参数信息',
+      '5. 输出仅包含JSON对象，无其他文字',
       '',
       '参数说明：',
       '- title: 图形标题',
@@ -296,10 +341,16 @@ class LLMService {
       '- legend: 图例标签数组 ["抛物线", "直线"]',
       '',
       '范围选择指南：',
-      '- 一次/二次函数：xRange默认[-10, 10]',
-      '- 三角函数：xRange默认[-2*pi, 2*pi] 即约[-6.28, 6.28]',
-      '- 指数函数：xRange默认[-3, 3]',
-      '- 物理题：根据实际物理量范围设定',
+      '- 一次/二次/多项式函数：xRange默认[-10, 10]，yRange根据顶点和最值适当选择',
+      '- 三角函数：xRange默认[-6.28, 6.28]（约2π），yRange默认[-2, 2]',
+      '- 指数函数：xRange默认[-3, 5]，yRange默认[-1, 20]',
+      '- 对数函数：xRange默认[0.01, 10]，yRange默认[-5, 5]',
+      '- 幂函数/根号函数：xRange默认[0, 10]',
+      '- 分段函数：覆盖所有分段定义域',
+      '- 双曲线/圆锥曲线：xRange默认[-10, 10]，yRange默认[-10, 10]',
+      '- 参数方程/极坐标：t范围根据周期完整覆盖',
+      '- 物理题：根据实际物理量范围设定（如运动学t∈[0,5]，高度y∈[0,30]）',
+      '- 不等式区域：xRange默认[-10, 10]，yRange默认[-10, 10]',
     ].join('\n');
 
     const typeName = imageType === 'MATH_STATIC_EQUATION' ? '函数图像（解析式）'
@@ -318,7 +369,9 @@ class LLMService {
     ].join('\n');
 
     const messages = [{ role: 'user', content: userPrompt }];
+    console.log('[extractFunctionParams] Calling DeepSeek...');
     const result = await this.callDeepSeek(messages, systemPrompt);
+    console.log('[extractFunctionParams] Raw response:', result?.substring(0, 400));
 
     try {
       const jsonMatch = result.match(/\{[\s\S]*\}/);
@@ -326,9 +379,9 @@ class LLMService {
         const params = JSON.parse(jsonMatch[0]);
         return this.generateFunctionCode(params, imageType);
       }
-      return JSON.parse(result);
+      throw new Error('No JSON found in function params response');
     } catch (parseError) {
-      console.error('函数参数解析失败:', parseError.message);
+      console.error('函数参数解析失败:', parseError.message, '原始响应:', result?.substring(0, 300));
       return this.generateFunctionCode({
         title: '数学图形',
         equations: ['y = x'],
@@ -343,6 +396,7 @@ class LLMService {
 
   // ==================== 代码生成 ====================
   static generateGeometryCode(params, imageType) {
+    console.log('[generateGeometryCode] imageType:', imageType, 'points:', params.points?.length, 'lines:', params.lines?.length);
     const title = params.title || '几何图形';
     const points = params.points || [
       { name: 'A', x: 0, y: 0, z: 0 },
@@ -433,11 +487,13 @@ class LLMService {
     let finalAnswer = '';
     const images = [];
 
+    console.log('[ThirdLayer] stepResults count:', stepResults.length);
     for (const step of stepResults) {
+      console.log(`[ThirdLayer] step ${step.id}: hasImageData=${!!step.imageData} imageDataLen=${step.imageData?.length || 0}`);
       if (step.imageData) {
         finalAnswer += '### 步骤 ' + step.id + '\n\n';
         finalAnswer += '[IMAGE:' + step.id + ']\n\n';
-        images.push({ stepId: step.id, imageData: step.imageData });
+        images.push({ stepId: step.id, imageData: step.imageData, imageType: step.executionResult?.imageType || 'png' });
         finalAnswer += step.description + '\n\n';
       } else {
         finalAnswer += '### 步骤 ' + step.id + '\n\n';
@@ -446,6 +502,44 @@ class LLMService {
     }
 
     return { finalAnswer, images };
+  }
+
+  // ==================== 提取动画参数 ====================
+  static async extractAnimationParams(stepDescription) {
+    const systemPrompt = [
+      '你是一个动画参数提取专家。请从题目描述中提取动画所需的参数。',
+      '',
+      '准则：',
+      '1. 仅基于题目信息提取。动图需要包含时间变量 t',
+      '2. 方程使用 Python/numpy 语法：np.sin, np.cos, np.exp, np.tan 等',
+      '3. 时间变量必须命名为 t',
+      '4. 输出仅包含JSON对象',
+      '',
+      '参数说明：',
+      '- title: 动画标题',
+      '- equations: 含 t 的函数表达式数组 ["np.sin(x + t*0.1)"]',
+      '- colors: 颜色数组 ["red", ...]',
+      '- xRange: x轴范围 [min, max]',
+      '- yRange: y轴范围 [min, max]',
+      '- frames: 帧数，默认100',
+      '- interval: 帧间隔ms，默认50',
+    ].join('\n');
+
+    const userPrompt = '请根据以下解题步骤提取动画参数：\n\n' + stepDescription + '\n\n请输出JSON。';
+    const messages = [{ role: 'user', content: userPrompt }];
+    const result = await this.callDeepSeek(messages, systemPrompt);
+
+    try {
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const params = JSON.parse(jsonMatch[0]);
+        return this.generateAnimationCode(params);
+      }
+      throw new Error('No JSON found in animation params response');
+    } catch (e) {
+      console.error('动画参数解析失败:', e.message, '原始响应:', result?.substring(0, 300));
+      return this.generateAnimationCode({ title: '动态演示' });
+    }
   }
 
   // ==================== 对话标题生成 ====================
