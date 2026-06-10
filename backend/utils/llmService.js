@@ -125,25 +125,215 @@ class LLMService {
     }
   }
 
-  // ==================== 第二层：根据步骤生成Python代码 ====================
+  // ==================== 第二层：根据步骤生成绘图参数（改进版） ====================
   static async secondLayerLLM(stepDescription, imageType) {
-    // 根据图像类型选择模板
-    const templates = {
-      MATH_STATIC_EQUATION: {
-        name: '数学静态图形（解析式）',
-        systemPrompt: `你是一个数学图形生成专家。请根据题目描述生成Python代码，使用matplotlib绘制静态图形。
+    // 根据图像类型选择不同的提示词策略
+    if (imageType === 'MATH_STATIC_ABSTRACT' || imageType === 'MATH_DYNAMIC_GEOMETRY') {
+      // 几何问题：提取几何参数
+      return this.extractGeometryParams(stepDescription, imageType);
+    } else {
+      // 函数问题：提取函数参数
+      return this.extractFunctionParams(stepDescription, imageType);
+    }
+  }
 
-**代码规范：**
-1. 必须使用 matplotlib 和 numpy 库
-2. 图形尺寸统一为 12x8 英寸
-3. 必须包含：标题、坐标轴标签、网格
-4. 使用 plt.savefig() 保存图片，不要使用 plt.show()
-5. 保存路径为 '/tmp/figure.png'
-6. 代码必须完整可运行，不要省略任何部分
+  // ==================== 提取几何参数 ====================
+  static async extractGeometryParams(stepDescription, imageType) {
+    const systemPrompt = `你是一个几何参数提取专家。请根据几何问题描述提取绘图所需的参数，仅输出JSON格式。
+    
+**输出格式要求：**
+- 必须是有效的JSON格式
+- 不要包含任何解释性文字
+- 只输出JSON对象
 
-**输出格式：**
-仅输出Python代码，使用 \`\`\`python ... \`\`\` 包裹`,
-        codeTemplate: `\`\`\`python
+**几何参数说明：**
+- title: 图形标题（字符串）
+- points: 关键点坐标数组，如 [{"name": "A", "x": 0, "y": 0, "z": 0}, {"name": "B", "x": 1, "y": 0, "z": 0}]
+- lines: 线段数组，如 [["A", "B"], ["B", "C"]]
+- planes: 平面数组，如 [{"name": "底面", "points": ["A", "B", "C"]}]
+- highlightPoints: 需要高亮的点名称数组
+- highlightLines: 需要高亮的线段数组
+- viewAngle: 3D视角，如 [30, 45]`;
+
+    const userPrompt = `请根据以下几何问题描述提取绘图参数：
+    
+题目描述：${stepDescription}
+
+请输出JSON格式的几何参数。`;
+
+    const messages = [{ role: 'user', content: userPrompt }];
+    const result = await this.callDeepSeek(messages, systemPrompt);
+    
+    try {
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const params = JSON.parse(jsonMatch[0]);
+        return this.generateGeometryCode(params, imageType);
+      }
+      return JSON.parse(result);
+    } catch (parseError) {
+      console.error('几何参数解析失败:', parseError.message);
+      return this.generateGeometryCode({
+        title: '几何图形',
+        points: [
+          { name: 'A', x: 0, y: 0, z: 0 },
+          { name: 'B', x: 2, y: 0, z: 0 },
+          { name: 'C', x: 0, y: 2, z: 0 },
+          { name: 'A1', x: 0, y: 0, z: 2 },
+          { name: 'B1', x: 2, y: 0, z: 2 },
+          { name: 'C1', x: 0, y: 2, z: 2 }
+        ],
+        lines: [['A', 'B'], ['B', 'C'], ['C', 'A'], ['A1', 'B1'], ['B1', 'C1'], ['C1', 'A1'], ['A', 'A1'], ['B', 'B1'], ['C', 'C1']]
+      }, imageType);
+    }
+  }
+
+  // ==================== 提取函数参数 ====================
+  static async extractFunctionParams(stepDescription, imageType) {
+    const systemPrompt = `你是一个函数参数提取专家。请根据数学问题描述提取函数绘图所需的参数，仅输出JSON格式，不要输出其他内容。
+    
+**输出格式要求：**
+- 必须是有效的JSON格式
+- 不要包含任何解释性文字
+- 只输出JSON对象
+
+**参数说明：**
+- title: 图形标题（字符串）
+- equations: 函数表达式数组，如 ["y = x**2", "y = np.sin(x)"]
+- colors: 颜色数组，与equations对应，如 ["red", "blue"]
+- xRange: x轴范围，如 [-10, 10]
+- yRange: y轴范围，如 [-5, 5]
+- showGrid: 是否显示网格（布尔值）
+- legend: 图例标签数组，如 ["抛物线", "正弦曲线"]`;
+
+    const userPrompt = `请根据以下数学问题描述提取函数绘图参数：
+    
+题目描述：${stepDescription}
+
+图像类型：${imageType === 'MATH_STATIC_EQUATION' ? '数学静态图形（解析式）' : 
+           imageType === 'CHEMISTRY_CRYSTAL' ? '化学晶胞' :
+           imageType === 'PHYSICS_ENGINE' ? '物理模拟' : '默认图形'}
+
+请输出JSON格式的参数。`;
+
+    const messages = [{ role: 'user', content: userPrompt }];
+    const result = await this.callDeepSeek(messages, systemPrompt);
+    
+    try {
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const params = JSON.parse(jsonMatch[0]);
+        return this.generateFunctionCode(params, imageType);
+      }
+      return JSON.parse(result);
+    } catch (parseError) {
+      console.error('函数参数解析失败:', parseError.message);
+      return this.generateFunctionCode({
+        title: '数学图形',
+        equations: ['y = x'],
+        colors: ['blue'],
+        xRange: [-10, 10],
+        yRange: [-10, 10],
+        showGrid: true,
+        legend: ['直线']
+      }, imageType);
+    }
+  }
+
+  // ==================== 生成几何图形代码 ====================
+  static generateGeometryCode(params, imageType) {
+    const title = params.title || '几何图形';
+    const points = params.points || [
+      { name: 'A', x: 0, y: 0, z: 0 },
+      { name: 'B', x: 2, y: 0, z: 0 },
+      { name: 'C', x: 0, y: 2, z: 0 },
+      { name: 'A1', x: 0, y: 0, z: 2 },
+      { name: 'B1', x: 2, y: 0, z: 2 },
+      { name: 'C1', x: 0, y: 2, z: 2 }
+    ];
+    const lines = params.lines || [['A', 'B'], ['B', 'C'], ['C', 'A'], ['A1', 'B1'], ['B1', 'C1'], ['C1', 'A1'], ['A', 'A1'], ['B', 'B1'], ['C', 'C1']];
+    const highlightLines = params.highlightLines || [];
+    
+    // 生成点坐标代码
+    const pointCode = points.map(p => `${p.name} = (${p.x}, ${p.y}, ${p.z})`).join('\n');
+    
+    // 生成线段代码
+    let lineCode = '';
+    lines.forEach((line, i) => {
+      const color = highlightLines.includes(line.join('-')) ? 'red' : 'blue';
+      lineCode += `ax.plot([${line[0]}[0], ${line[1]}[0]], [${line[0]}[1], ${line[1]}[1]], [${line[0]}[2], ${line[1]}[2]], color='${color}', linewidth=${highlightLines.includes(line.join('-')) ? 3 : 2})\n`;
+    });
+    
+    // 生成点标记代码
+    const scatterCode = points.map(p => `ax.scatter(${p.x}, ${p.y}, ${p.z}, c='black', s=50)\nax.text(${p.x}+0.1, ${p.y}+0.1, ${p.z}+0.1, '${p.name}', fontsize=12)`).join('\n');
+    
+    return `\`\`\`python
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+
+# 设置中文字体支持
+plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False
+
+# 创建3D图形
+fig = plt.figure(figsize=(12, 8))
+ax = fig.add_subplot(111, projection='3d')
+
+# 定义点坐标
+${pointCode}
+
+# 绘制线段
+${lineCode}
+
+# 绘制点和标签
+${scatterCode}
+
+# 设置图形属性
+ax.set_title('${title}', fontsize=14, fontweight='bold')
+ax.set_xlabel('X轴', fontsize=12)
+ax.set_ylabel('Y轴', fontsize=12)
+ax.set_zlabel('Z轴', fontsize=12)
+ax.grid(True, linestyle='--', alpha=0.7)
+
+# 调整视角
+ax.view_init(elev=30, azim=45)
+
+# 保存图片
+plt.tight_layout()
+plt.savefig('/tmp/figure.png', dpi=150, bbox_inches='tight')
+print("图片已保存到 /tmp/figure.png")
+\`\`\``;
+  }
+
+  // ==================== 根据参数生成Python代码 ====================
+  static generateFunctionCode(params, imageType) {
+    const title = params.title || '数学图形';
+    const equations = params.equations || ['y = x'];
+    const colors = params.colors || ['blue'];
+    const xRange = params.xRange || [-10, 10];
+    const yRange = params.yRange || [-10, 10];
+    const showGrid = params.showGrid !== undefined ? params.showGrid : true;
+    const legend = params.legend || equations.map((_, i) => `曲线${i+1}`);
+
+    while (colors.length < equations.length) {
+      colors.push('blue');
+    }
+
+    switch (imageType) {
+      case 'MATH_DYNAMIC_GEOMETRY':
+        return this.generateAnimationCode(params);
+      case 'CHEMISTRY_CRYSTAL':
+        return this.generateCrystalCode(params);
+      case 'PHYSICS_ENGINE':
+        return this.generatePhysicsCode(params);
+      default:
+        return this.generateStaticCode({ title, equations, colors, xRange, yRange, showGrid, legend });
+    }
+  }
+
+  // ==================== 生成静态图形代码 ====================
+  static generateStaticCode({ title, equations, colors, xRange, yRange, showGrid, legend }) {
+    return `\`\`\`python
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -155,40 +345,37 @@ plt.rcParams['axes.unicode_minus'] = False
 fig, ax = plt.subplots(figsize=(12, 8))
 
 # 定义变量范围
-x = np.linspace(-10, 10, 1000)
+x = np.linspace(${xRange[0]}, ${xRange[1]}, 1000)
 
-# 在此处添加你的绘图代码
-# y = ...
+# 绘制函数曲线
+${equations.map((eq, i) => `y${i} = ${eq}\nax.plot(x, y${i}, color='${colors[i]}', label='${legend[i]}', linewidth=2)`).join('\n')}
 
 # 图形设置
-ax.set_title('图形标题', fontsize=14, fontweight='bold')
+ax.set_title('${title}', fontsize=14, fontweight='bold')
 ax.set_xlabel('X轴', fontsize=12)
 ax.set_ylabel('Y轴', fontsize=12)
-ax.grid(True, linestyle='--', alpha=0.7)
+ax.set_xlim(${xRange[0]}, ${xRange[1]})
+ax.set_ylim(${yRange[0]}, ${yRange[1]})
+${showGrid ? 'ax.grid(True, linestyle=\'--\', alpha=0.7)' : ''}
 ax.legend(fontsize=12)
 
 # 保存图片
 plt.tight_layout()
 plt.savefig('/tmp/figure.png', dpi=150, bbox_inches='tight')
 print("图片已保存到 /tmp/figure.png")
-\`\`\``
-      },
-      
-      MATH_DYNAMIC_GEOMETRY: {
-        name: '数学动态图形（几何描述）',
-        systemPrompt: `你是一个数学动态图形生成专家。请根据几何描述生成Python动画代码，使用matplotlib的animation模块。
+\`\`\``;
+  }
 
-**代码规范：**
-1. 必须使用 matplotlib, numpy, matplotlib.animation 库
-2. 图形尺寸统一为 12x8 英寸
-3. 动画需要清晰展示几何变化过程
-4. 使用 FuncAnimation 创建动画
-5. 保存为GIF格式，路径为 '/tmp/animation.gif'
-6. 代码必须完整可运行
-
-**输出格式：**
-仅输出Python代码，使用 \`\`\`python ... \`\`\` 包裹`,
-        codeTemplate: `\`\`\`python
+  // ==================== 生成动画代码 ====================
+  static generateAnimationCode(params) {
+    const title = params.title || '动态几何演示';
+    const equations = params.equations || ['np.sin(x + t * 0.1)'];
+    const colors = params.colors || ['blue'];
+    
+    // 使用第一个方程
+    const mainEquation = equations[0] || 'np.sin(x + t * 0.1)';
+    
+    return `\`\`\`python
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import numpy as np
@@ -203,10 +390,10 @@ ax.set_xlim(-10, 10)
 ax.set_ylim(-10, 10)
 ax.set_aspect('equal')
 ax.grid(True, linestyle='--', alpha=0.7)
-ax.set_title('动态几何演示', fontsize=14, fontweight='bold')
+ax.set_title('${title}', fontsize=14, fontweight='bold')
 
 # 初始化图形元素
-line, = ax.plot([], [], 'b-', linewidth=2)
+line, = ax.plot([], [], '${colors[0]}', linewidth=2)
 point, = ax.plot([], [], 'ro', markersize=8)
 
 def init():
@@ -215,9 +402,9 @@ def init():
     return line, point
 
 def update(frame):
-    # 动画更新逻辑
     x = np.linspace(-10, 10, 1000)
-    y = np.sin(x + frame * 0.1)  # 示例：正弦波动画
+    t = frame
+    y = ${mainEquation}
     line.set_data(x, y)
     point.set_data([x[500]], [y[500]])
     return line, point
@@ -231,23 +418,14 @@ ani = animation.FuncAnimation(
 # 保存为GIF
 ani.save('/tmp/animation.gif', writer='pillow', fps=20)
 print("动画已保存到 /tmp/animation.gif")
-\`\`\``
-      },
-      
-      MATH_STATIC_ABSTRACT: {
-        name: '数学静态图形（抽象函数）',
-        systemPrompt: `你是一个抽象数学概念可视化专家。请为抽象数学概念生成可视化代码，使用matplotlib绘制示意性图形。
+\`\`\``;
+  }
 
-**代码规范：**
-1. 必须使用 matplotlib 和 numpy 库
-2. 图形尺寸统一为 12x8 英寸
-3. 添加必要的标注和说明
-4. 使用 plt.savefig() 保存图片，路径为 '/tmp/figure.png'
-5. 代码必须完整可运行
-
-**输出格式：**
-仅输出Python代码，使用 \`\`\`python ... \`\`\` 包裹`,
-        codeTemplate: `\`\`\`python
+  // ==================== 生成抽象概念代码 ====================
+  static generateAbstractCode(params) {
+    const title = params.title || '抽象概念可视化';
+    
+    return `\`\`\`python
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -258,36 +436,32 @@ plt.rcParams['axes.unicode_minus'] = False
 # 设置图形尺寸
 fig, ax = plt.subplots(figsize=(12, 8))
 
-# 抽象概念可视化代码
-# 在此处添加你的绘图代码
-
-# 图形设置
-ax.set_title('抽象概念可视化', fontsize=14, fontweight='bold')
+# 绘制抽象概念图形
+ax.set_title('${title}', fontsize=14, fontweight='bold')
 ax.set_xlabel('X轴', fontsize=12)
 ax.set_ylabel('Y轴', fontsize=12)
 ax.grid(True, linestyle='--', alpha=0.7)
+
+# 示例：绘制多个函数曲线展示抽象关系
+x = np.linspace(-5, 5, 100)
+ax.plot(x, x**2, 'r-', label='二次函数', linewidth=2)
+ax.plot(x, np.exp(x), 'b-', label='指数函数', linewidth=2)
+ax.plot(x, np.log(np.abs(x) + 1), 'g-', label='对数函数', linewidth=2)
+
+ax.legend(fontsize=12)
 
 # 保存图片
 plt.tight_layout()
 plt.savefig('/tmp/figure.png', dpi=150, bbox_inches='tight')
 print("图片已保存到 /tmp/figure.png")
-\`\`\``
-      },
-      
-      CHEMISTRY_CRYSTAL: {
-        name: '化学晶胞模型',
-        systemPrompt: `你是一个化学晶体结构可视化专家。请根据分子结构描述生成Python代码，使用matplotlib绘制晶胞结构和截面图。
+\`\`\``;
+  }
 
-**代码规范：**
-1. 必须使用 matplotlib, numpy, mpl_toolkits.mplot3d 库
-2. 图形尺寸统一为 18x6 英寸（三个子图）
-3. 从多个角度展示：3D结构、前视截面、俯视截面
-4. 使用 plt.savefig() 保存图片，路径为 '/tmp/figure.png'
-5. 代码必须完整可运行
-
-**输出格式：**
-仅输出Python代码，使用 \`\`\`python ... \`\`\` 包裹`,
-        codeTemplate: `\`\`\`python
+  // ==================== 生成晶胞结构代码 ====================
+  static generateCrystalCode(params) {
+    const title = params.title || '晶胞结构';
+    
+    return `\`\`\`python
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
@@ -302,44 +476,50 @@ fig = plt.figure(figsize=(18, 6))
 # 3D晶胞结构
 ax1 = fig.add_subplot(131, projection='3d')
 ax1.set_title('晶胞三维结构', fontsize=12)
-# 在此处添加3D绘图代码
+# 绘制简单立方晶胞
+r = [0, 1]
+for x in r:
+    for y in r:
+        for z in r:
+            ax1.scatter(x, y, z, c='blue', s=100)
+ax1.set_xlim(-0.5, 1.5)
+ax1.set_ylim(-0.5, 1.5)
+ax1.set_zlim(-0.5, 1.5)
 
 # 前视图
 ax2 = fig.add_subplot(132)
 ax2.set_title('前视截面', fontsize=12)
 ax2.set_aspect('equal')
 ax2.grid(True, linestyle='--', alpha=0.7)
-# 在此处添加前视图代码
+for x in r:
+    for y in r:
+        ax2.scatter(x, y, c='red', s=100)
+ax2.set_xlim(-0.5, 1.5)
+ax2.set_ylim(-0.5, 1.5)
 
 # 俯视图
 ax3 = fig.add_subplot(133)
 ax3.set_title('俯视截面', fontsize=12)
 ax3.set_aspect('equal')
 ax3.grid(True, linestyle='--', alpha=0.7)
-# 在此处添加俯视图代码
+for x in r:
+    for z in r:
+        ax3.scatter(x, z, c='green', s=100)
+ax3.set_xlim(-0.5, 1.5)
+ax3.set_ylim(-0.5, 1.5)
 
 # 保存图片
 plt.tight_layout()
 plt.savefig('/tmp/figure.png', dpi=150, bbox_inches='tight')
 print("图片已保存到 /tmp/figure.png")
-\`\`\``
-      },
-      
-      PHYSICS_ENGINE: {
-        name: '物理模拟引擎',
-        systemPrompt: `你是一个物理模拟专家。请根据物理问题描述生成Python模拟代码，使用matplotlib进行可视化。
+\`\`\``;
+  }
 
-**代码规范：**
-1. 必须使用 matplotlib, numpy 库，可选使用 matplotlib.animation
-2. 图形尺寸统一为 12x8 英寸
-3. 展示：初始状态、运动过程、关键参数变化
-4. 添加必要的物理量标注
-5. 使用 plt.savefig() 保存图片，路径为 '/tmp/figure.png'
-6. 代码必须完整可运行
-
-**输出格式：**
-仅输出Python代码，使用 \`\`\`python ... \`\`\` 包裹`,
-        codeTemplate: `\`\`\`python
+  // ==================== 生成物理模拟代码 ====================
+  static generatePhysicsCode(params) {
+    const title = params.title || '物理模拟';
+    
+    return `\`\`\`python
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -348,85 +528,46 @@ plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
 # 物理参数定义
-# 在此处定义物理参数
+g = 9.8  # 重力加速度
+v0 = 20  # 初始速度
+theta = 45  # 发射角度（度）
 
 # 设置图形
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
 
 # 左图：运动轨迹
-ax1.set_xlim(0, 100)
-ax1.set_ylim(0, 100)
-ax1.set_aspect('equal')
+ax1.set_xlim(0, 50)
+ax1.set_ylim(0, 25)
+ax1.set_aspect('auto')
 ax1.grid(True, linestyle='--', alpha=0.7)
-ax1.set_title('运动轨迹', fontsize=14, fontweight='bold')
-ax1.set_xlabel('X位置', fontsize=12)
-ax1.set_ylabel('Y位置', fontsize=12)
+ax1.set_title('${title} - 运动轨迹', fontsize=14, fontweight='bold')
+ax1.set_xlabel('水平距离 (m)', fontsize=12)
+ax1.set_ylabel('高度 (m)', fontsize=12)
 
-# 右图：参数变化
+# 计算抛物线轨迹
+t = np.linspace(0, 3, 100)
+x = v0 * np.cos(np.radians(theta)) * t
+y = v0 * np.sin(np.radians(theta)) * t - 0.5 * g * t**2
+ax1.plot(x, y, 'b-', linewidth=2, label='抛体运动轨迹')
+ax1.legend(fontsize=12)
+
+# 右图：速度变化
 ax2.set_xlabel('时间 (s)', fontsize=12)
-ax2.set_ylabel('参数值', fontsize=12)
-ax2.set_title('参数变化曲线', fontsize=14, fontweight='bold')
+ax2.set_ylabel('速度 (m/s)', fontsize=12)
+ax2.set_title('速度变化曲线', fontsize=14, fontweight='bold')
 ax2.grid(True, linestyle='--', alpha=0.7)
 
-# 在此处添加物理模拟代码
+vx = v0 * np.cos(np.radians(theta)) * np.ones_like(t)
+vy = v0 * np.sin(np.radians(theta)) - g * t
+ax2.plot(t, vx, 'r-', label='水平速度', linewidth=2)
+ax2.plot(t, vy, 'g-', label='竖直速度', linewidth=2)
+ax2.legend(fontsize=12)
 
 # 保存图片
 plt.tight_layout()
 plt.savefig('/tmp/figure.png', dpi=150, bbox_inches='tight')
 print("图片已保存到 /tmp/figure.png")
-\`\`\``
-      },
-      
-      DEFAULT: {
-        name: '默认图形',
-        systemPrompt: `你是一个图形生成专家。请根据描述生成Python可视化代码。
-
-**代码规范：**
-1. 使用 matplotlib 和 numpy 库
-2. 图形尺寸统一为 12x8 英寸
-3. 使用 plt.savefig() 保存图片，路径为 '/tmp/figure.png'
-4. 代码必须完整可运行
-
-**输出格式：**
-仅输出Python代码，使用 \`\`\`python ... \`\`\` 包裹`,
-        codeTemplate: `\`\`\`python
-import matplotlib.pyplot as plt
-import numpy as np
-
-plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
-plt.rcParams['axes.unicode_minus'] = False
-
-fig, ax = plt.subplots(figsize=(12, 8))
-
-# 在此处添加绘图代码
-
-ax.set_title('图形标题', fontsize=14, fontweight='bold')
-ax.grid(True, linestyle='--', alpha=0.7)
-
-plt.tight_layout()
-plt.savefig('/tmp/figure.png', dpi=150, bbox_inches='tight')
-print("图片已保存到 /tmp/figure.png")
-\`\`\``
-      }
-    };
-
-    const template = templates[imageType] || templates.DEFAULT;
-    
-    const messages = [
-      {
-        role: 'user',
-        content: `请根据以下步骤描述生成Python可视化代码：
-
-步骤描述：${stepDescription}
-
-图像类型：${template.name}
-
-请生成完整、可运行的Python代码。`
-      }
-    ];
-
-    const result = await this.callDeepSeek(messages, template.systemPrompt);
-    return result;
+\`\`\``;
   }
 
   // ==================== 第三层：收集结果并合成最终答案 ====================

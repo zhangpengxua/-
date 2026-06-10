@@ -27,17 +27,18 @@ async function executePythonCode(code) {
     
     // Windows下修改保存路径
     const tmpDir = path.join(__dirname, '..', 'tmp');
-    const windowsSavePath = path.join(tmpDir, 'figure.png');
+    const windowsPngPath = path.join(tmpDir, 'figure.png');
+    const windowsGifPath = path.join(tmpDir, 'animation.gif');
     
     // 替换代码中的保存路径
-    pythonCode = pythonCode.replace(/\/tmp\/figure\.png/g, windowsSavePath.replace(/\\/g, '\\\\'));
-    pythonCode = pythonCode.replace(/\/tmp\/animation\.gif/g, path.join(tmpDir, 'animation.gif').replace(/\\/g, '\\\\'));
+    pythonCode = pythonCode.replace(/\/tmp\/figure\.png/g, windowsPngPath.replace(/\\/g, '\\\\'));
+    pythonCode = pythonCode.replace(/\/tmp\/animation\.gif/g, windowsGifPath.replace(/\\/g, '\\\\'));
     
     // Windows下使用临时文件
     const tempFile = path.join(__dirname, '..', 'temp_figure.py');
     fs.writeFileSync(tempFile, pythonCode, 'utf8');
     
-    console.log('Python代码保存路径:', windowsSavePath);
+    console.log('Python代码保存路径:', windowsPngPath);
     
     const pythonProcess = spawn('python', [tempFile]);
     
@@ -60,27 +61,41 @@ async function executePythonCode(code) {
         fs.unlinkSync(tempFile);
       } catch (e) {}
       
-      // 检查是否生成了图片
+      // 检查是否生成了图片或动图
       let imageData = null;
+      let imageType = 'png'; // 默认PNG格式
       
-      if (fs.existsSync(windowsSavePath)) {
+      // 优先检查GIF动图
+      if (fs.existsSync(windowsGifPath)) {
         try {
-          imageData = fs.readFileSync(windowsSavePath, { encoding: 'base64' });
-          console.log('图片读取成功，大小:', imageData.length);
-          // 清理图片文件
-          fs.unlinkSync(windowsSavePath);
+          imageData = fs.readFileSync(windowsGifPath, { encoding: 'base64' });
+          imageType = 'gif';
+          console.log('GIF动图读取成功，大小:', imageData.length);
+          fs.unlinkSync(windowsGifPath);
         } catch (e) {
-          console.error('读取图片失败:', e.message);
+          console.error('读取GIF失败:', e.message);
+        }
+      } 
+      // 如果没有GIF，检查PNG
+      else if (fs.existsSync(windowsPngPath)) {
+        try {
+          imageData = fs.readFileSync(windowsPngPath, { encoding: 'base64' });
+          imageType = 'png';
+          console.log('PNG图片读取成功，大小:', imageData.length);
+          fs.unlinkSync(windowsPngPath);
+        } catch (e) {
+          console.error('读取PNG失败:', e.message);
         }
       } else {
-        console.log('图片文件不存在:', windowsSavePath);
+        console.log('图片文件不存在');
       }
       
       resolve({
         success: exitCode === 0,
         stdout,
         stderr,
-        imageData
+        imageData,
+        imageType
       });
     });
     
@@ -91,14 +106,14 @@ async function executePythonCode(code) {
       });
     });
     
-    // 设置超时（60秒）
+    // 设置超时（90秒，动图生成可能需要更长时间）
     setTimeout(() => {
       pythonProcess.kill();
       resolve({
         success: false,
         error: 'Python执行超时'
       });
-    }, 60000);
+    }, 90000);
   });
 }
 
@@ -219,11 +234,13 @@ router.post('/:id/message', async (req, res) => {
           
           if (executionResult.success && executionResult.imageData) {
             stepResult.imageData = executionResult.imageData;
+            stepResult.imageType = executionResult.imageType; // 保存图片类型
             images.push({
               stepId: step.id,
-              imageData: executionResult.imageData
+              imageData: executionResult.imageData,
+              imageType: executionResult.imageType // 保存图片类型
             });
-            console.log(`步骤 ${step.id} 图片生成成功`);
+            console.log(`步骤 ${step.id} 图片生成成功，类型: ${executionResult.imageType}`);
           } else if (!executionResult.success) {
             console.warn(`步骤 ${step.id} Python执行失败:`, executionResult.stderr || executionResult.error);
           }
