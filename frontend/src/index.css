@@ -4,6 +4,11 @@
   box-sizing: border-box;
 }
 
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
 @font-face {
   font-family: 'Forma DJR Micro';
   src: local('Forma DJR Micro'), local('Arial');
@@ -19,7 +24,8 @@ body {
 }
 
 #root {
-  height: 100vh;
+  height: 100%;
+  overflow: hidden;
 }
 
 ::-webkit-scrollbar {

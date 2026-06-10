@@ -22,11 +22,15 @@ async function executePythonCode(code) {
       resolve({ success: false, error: '未找到Python代码块' });
       return;
     }
-    
+
     let pythonCode = codeMatch[1];
-    
+
     // Windows下修改保存路径
     const tmpDir = path.join(__dirname, '..', 'tmp');
+    // 确保 tmp 目录存在
+    if (!fs.existsSync(tmpDir)) {
+      fs.mkdirSync(tmpDir, { recursive: true });
+    }
     const windowsPngPath = path.join(tmpDir, 'figure.png');
     const windowsGifPath = path.join(tmpDir, 'animation.gif');
     

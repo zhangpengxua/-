@@ -18,6 +18,19 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api/conversations', conversationRoutes);
 app.use('/api/python', pythonRoutes);
 
+// OCR-only endpoint
+const OCRService = require('./utils/ocrService');
+app.post('/api/ocr', async (req, res) => {
+  try {
+    const { imageBase64 } = req.body;
+    if (!imageBase64) return res.status(400).json({ error: 'No image provided' });
+    const text = await OCRService.recognizeText(imageBase64);
+    res.json({ text });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/', (req, res) => {
   res.json({ message: 'DeepSeek Chat API is running' });
 });
