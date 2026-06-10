@@ -1,5 +1,5 @@
-import { useState, useRef } from 'react';
-import { theme } from '../theme';
+import { useState, useRef, useContext, useEffect } from 'react';
+import { ThemeContext } from '../theme';
 
 const sendIcon = (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -23,28 +23,43 @@ const cameraIcon = (
   </svg>
 );
 
-const fileIcon = (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-    <polyline points="14 2 14 8 20 8" />
-    <line x1="16" y1="13" x2="8" y2="13" />
-    <line x1="16" y1="17" x2="8" y2="17" />
-    <polyline points="10 9 9 9 8 9" />
+const checkIcon = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <polyline points="20 6 9 17 4 12" />
   </svg>
 );
 
-const InputArea = ({ onSendMessage }) => {
+const InputArea = ({ onSendMessage, ocrResult }) => {
+  const { theme } = useContext(ThemeContext);
   const [inputValue, setInputValue] = useState('');
   const [imagePreview, setImagePreview] = useState(null);
+  const [imageBase64Raw, setImageBase64Raw] = useState(null);
   const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
+  const [ocrText, setOcrText] = useState('');
+  const [isOcrPending, setIsOcrPending] = useState(false);
+
+  // When parent provides OCR result, update the editable text
+  useEffect(() => {
+    if (ocrResult) {
+      setOcrText(ocrResult);
+    }
+  }, [ocrResult]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (inputValue.trim() || imagePreview) {
-      onSendMessage(inputValue.trim(), imagePreview);
+    if (isOcrPending) {
+      onSendMessage(inputValue.trim() || ocrText, imageBase64Raw, ocrText);
       setInputValue('');
       setImagePreview(null);
+      setImageBase64Raw(null);
+      setOcrText('');
+      setIsOcrPending(false);
+    } else if (inputValue.trim() || imagePreview) {
+      onSendMessage(inputValue.trim(), imagePreview, null);
+      setInputValue('');
+      setImagePreview(null);
+      setImageBase64Raw(null);
     }
   };
 
@@ -53,7 +68,11 @@ const InputArea = ({ onSendMessage }) => {
     if (file) {
       const reader = new FileReader();
       reader.onload = (event) => {
-        setImagePreview(event.target.result);
+        const base64 = event.target.result;
+        setImagePreview(base64);
+        setImageBase64Raw(base64);
+        setIsOcrPending(true);
+        onSendMessage('__OCR_REQUEST__', base64, null);
       };
       reader.readAsDataURL(file);
     }
@@ -64,7 +83,11 @@ const InputArea = ({ onSendMessage }) => {
     if (file) {
       const reader = new FileReader();
       reader.onload = (event) => {
-        setImagePreview(event.target.result);
+        const base64 = event.target.result;
+        setImagePreview(base64);
+        setImageBase64Raw(base64);
+        setIsOcrPending(true);
+        onSendMessage('__OCR_REQUEST__', base64, null);
       };
       reader.readAsDataURL(file);
     }
@@ -72,6 +95,9 @@ const InputArea = ({ onSendMessage }) => {
 
   const removeImage = () => {
     setImagePreview(null);
+    setImageBase64Raw(null);
+    setOcrText('');
+    setIsOcrPending(false);
   };
 
   return (
@@ -79,8 +105,59 @@ const InputArea = ({ onSendMessage }) => {
       padding: theme.spacing.md,
       borderTop: `1px solid ${theme.colors.hairline}`,
       backgroundColor: theme.colors.canvas,
+      flexShrink: 0,
     }}>
-      {/* 图片预览 */}
+      {/* OCR result confirmation area */}
+      {isOcrPending && ocrText && (
+        <div style={{
+          marginBottom: theme.spacing.sm,
+          padding: theme.spacing.md,
+          backgroundColor: theme.colors.primarySoft,
+          borderRadius: theme.rounded.md,
+          border: `1px solid ${theme.colors.primary}`,
+        }}>
+          <div style={{
+            ...theme.typography.captionBold,
+            color: theme.colors.primary,
+            marginBottom: theme.spacing.xs,
+          }}>
+            图片识别结果（可编辑修改）：
+          </div>
+          <textarea
+            value={ocrText}
+            onChange={(e) => setOcrText(e.target.value)}
+            style={{
+              ...theme.typography.bodyMd,
+              width: '100%',
+              height: '140px',
+              padding: theme.spacing.sm,
+              borderRadius: theme.rounded.sm,
+              border: `1px solid ${theme.colors.hairlineStrong}`,
+              backgroundColor: theme.colors.canvas,
+              color: theme.colors.ink,
+              outline: 'none',
+              resize: 'vertical',
+            }}
+            onFocus={(e) => { e.target.style.borderColor = theme.colors.primary; }}
+            onBlur={(e) => { e.target.style.borderColor = theme.colors.hairlineStrong; }}
+          />
+        </div>
+      )}
+
+      {isOcrPending && !ocrText && (
+        <div style={{
+          marginBottom: theme.spacing.sm,
+          padding: theme.spacing.md,
+          backgroundColor: theme.colors.fog,
+          borderRadius: theme.rounded.md,
+          ...theme.typography.captionMd,
+          color: theme.colors.graphite,
+        }}>
+          正在识别图片文字…
+        </div>
+      )}
+
+      {/* Image preview */}
       {imagePreview && (
         <div style={{
           display: 'flex',
@@ -91,14 +168,14 @@ const InputArea = ({ onSendMessage }) => {
           backgroundColor: theme.colors.cloud,
           borderRadius: theme.rounded.md,
         }}>
-          <img 
-            src={imagePreview} 
-            alt="预览" 
-            style={{ 
-              height: '60px', 
+          <img
+            src={imagePreview}
+            alt="预览"
+            style={{
+              height: '60px',
               borderRadius: theme.rounded.sm,
               objectFit: 'cover',
-            }} 
+            }}
           />
           <button
             onClick={removeImage}
@@ -120,7 +197,6 @@ const InputArea = ({ onSendMessage }) => {
         </div>
       )}
 
-      {/* 输入框 */}
       <form onSubmit={handleSubmit} style={{ display: 'flex', gap: theme.spacing.sm }}>
         <div style={{
           display: 'flex',
@@ -130,7 +206,6 @@ const InputArea = ({ onSendMessage }) => {
           borderRadius: theme.rounded.lg,
           marginRight: theme.spacing.sm,
         }}>
-          {/* 图片上传按钮 */}
           <label style={{
             cursor: 'pointer',
             padding: theme.spacing.sm,
@@ -147,11 +222,11 @@ const InputArea = ({ onSendMessage }) => {
               type="file"
               accept="image/*"
               onChange={handleImageUpload}
+              onClick={(e) => { e.target.value = null; }}
               style={{ display: 'none' }}
             />
           </label>
 
-          {/* 相机按钮 */}
           <label style={{
             cursor: 'pointer',
             padding: theme.spacing.sm,
@@ -169,41 +244,17 @@ const InputArea = ({ onSendMessage }) => {
               accept="image/*"
               capture="environment"
               onChange={handleCameraCapture}
-              style={{ display: 'none' }}
-            />
-          </label>
-
-          {/* 文件上传按钮 */}
-          <label style={{
-            cursor: 'pointer',
-            padding: theme.spacing.sm,
-            borderRadius: theme.rounded.md,
-            color: theme.colors.graphite,
-            transition: 'background-color 0.2s',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }} onMouseEnter={(e) => { e.target.style.backgroundColor = theme.colors.fog; }} onMouseLeave={(e) => { e.target.style.backgroundColor = 'transparent'; }}>
-            {fileIcon}
-            <input
-              type="file"
-              onChange={(e) => {
-                const file = e.target.files[0];
-                if (file) {
-                  console.log('File selected:', file.name);
-                }
-              }}
+              onClick={(e) => { e.target.value = null; }}
               style={{ display: 'none' }}
             />
           </label>
         </div>
 
-        {/* 文本输入 */}
         <input
           type="text"
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
-          placeholder="输入数学问题..."
+          placeholder={isOcrPending ? '输入补充说明（可选）…' : '输入数学问题…'}
           style={{
             ...theme.typography.bodyMd,
             flex: 1,
@@ -219,20 +270,19 @@ const InputArea = ({ onSendMessage }) => {
           onBlur={(e) => { e.target.style.borderColor = theme.colors.hairline; }}
         />
 
-        {/* 发送按钮 */}
         <button
           type="submit"
-          disabled={!inputValue.trim() && !imagePreview}
+          disabled={!isOcrPending && !inputValue.trim() && !imagePreview}
           style={{
             ...theme.typography.buttonMd,
-            backgroundColor: inputValue.trim() || imagePreview
+            backgroundColor: (isOcrPending || inputValue.trim() || imagePreview)
               ? theme.colors.primary
               : theme.colors.steel,
             color: theme.colors.onPrimary,
             border: 'none',
             borderRadius: theme.rounded.md,
             padding: `${theme.spacing.sm} ${theme.spacing.xl}`,
-            cursor: inputValue.trim() || imagePreview ? 'pointer' : 'not-allowed',
+            cursor: (isOcrPending || inputValue.trim() || imagePreview) ? 'pointer' : 'not-allowed',
             transition: 'background-color 0.2s',
             display: 'flex',
             alignItems: 'center',
@@ -240,18 +290,27 @@ const InputArea = ({ onSendMessage }) => {
             gap: theme.spacing.xs,
           }}
           onMouseEnter={(e) => {
-            if (inputValue.trim() || imagePreview) {
+            if (isOcrPending || inputValue.trim() || imagePreview) {
               e.target.style.backgroundColor = theme.colors.primaryBright;
             }
           }}
           onMouseLeave={(e) => {
-            e.target.style.backgroundColor = inputValue.trim() || imagePreview
+            e.target.style.backgroundColor = (isOcrPending || inputValue.trim() || imagePreview)
               ? theme.colors.primary
               : theme.colors.steel;
           }}
         >
-          {sendIcon}
-          发送
+          {isOcrPending ? (
+            <>
+              {checkIcon}
+              确认发送
+            </>
+          ) : (
+            <>
+              {sendIcon}
+              发送
+            </>
+          )}
         </button>
       </form>
     </div>

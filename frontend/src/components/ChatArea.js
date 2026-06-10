@@ -1,5 +1,5 @@
-import { theme } from '../theme';
-import Interactive3DViewer from './Interactive3DViewer';
+import { useContext } from 'react';
+import { ThemeContext } from '../theme';
 
 const userIcon = (
   <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -18,6 +18,7 @@ const botIcon = (
 );
 
 const ChatArea = ({ messages = [], isLoading, formatDate }) => {
+  const { theme } = useContext(ThemeContext);
   const parseMessageContent = (content, images, stepResults) => {
     const parts = [];
     
@@ -73,25 +74,25 @@ const ChatArea = ({ messages = [], isLoading, formatDate }) => {
               
               {part.imageData && (
                 <div style={{ marginBottom: theme.spacing.sm, textAlign: 'center' }}>
-                  {part.imageType === 'MATH_STATIC_ABSTRACT' || 
-                   part.imageType === 'MATH_DYNAMIC_GEOMETRY' ||
-                   part.imageType === 'PHYSICS_ENGINE' ? (
-                    <Interactive3DViewer 
-                      shapeInfo={{ 
-                        type: 'cube', 
-                        dimensions: '3x3x3',
-                        properties: '三维立方体'
-                      }} 
+                  {part.imageFormat === 'gif' ? (
+                    <img
+                      src={`data:image/gif;base64,${part.imageData}`}
+                      alt={`步骤${part.stepId}图形`}
+                      style={{
+                        maxWidth: '100%',
+                        borderRadius: theme.rounded.xl,
+                        boxShadow: theme.elevation.softLift,
+                      }}
                     />
                   ) : (
-                    <img 
-                      src={`data:image/${part.imageFormat === 'gif' ? 'gif' : 'png'};base64,${part.imageData}`} 
-                      alt={`步骤${part.stepId}图形`} 
-                      style={{ 
-                        maxWidth: '100%', 
-                        borderRadius: theme.rounded.xl, 
+                    <img
+                      src={`data:image/png;base64,${part.imageData}`}
+                      alt={`步骤${part.stepId}图形`}
+                      style={{
+                        maxWidth: '100%',
+                        borderRadius: theme.rounded.xl,
                         boxShadow: theme.elevation.softLift,
-                      }} 
+                      }}
                     />
                   )}
                 </div>
@@ -130,12 +131,13 @@ const ChatArea = ({ messages = [], isLoading, formatDate }) => {
   };
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
       {/* 对话标题 */}
       <div style={{
         padding: theme.spacing.md,
         borderBottom: `1px solid ${theme.colors.hairline}`,
         backgroundColor: theme.colors.canvas,
+        flexShrink: 0,
       }}>
         <h2 style={{
           ...theme.typography.displayXs,
