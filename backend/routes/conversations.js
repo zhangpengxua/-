@@ -109,6 +109,9 @@ router.post('/:id/message', async (req, res) => {
         if (activeRequests[convId]?.abort) return;
         const layer1 = await LLMService.firstLayerLLM(context, content);
 
+        // 用于存储前一步的参数，实现上下文一致性
+        let previousParams = null;
+
         for (const step of layer1.steps) {
           if (activeRequests[convId]?.abort) return;
           console.log(`[Step ${step.id}] needImage=${step.needImage} imageType=${step.imageType} desc=${step.description?.substring(0, 80)}`);
@@ -116,7 +119,10 @@ router.post('/:id/message', async (req, res) => {
           if (step.needImage && step.imageType !== 'NO_IMAGE') {
             if (activeRequests[convId]?.abort) return;
             console.log(`[Step ${step.id}] Calling secondLayerLLM for imageType=${step.imageType}...`);
-            sr.pythonCode = await LLMService.secondLayerLLM(step.description, step.imageType);
+
+            // 传递前一步的参数以保持一致性
+            sr.pythonCode = await LLMService.secondLayerLLM(step.description, step.imageType, previousParams);
+
             console.log(`[Step ${step.id}] pythonCode type=${typeof sr.pythonCode} len=${sr.pythonCode?.length || 0}`);
             console.log(`[Step ${step.id}] pythonCode preview: ${(sr.pythonCode ? sr.pythonCode.substring(0, 200) : 'NULL')}`);
             if (activeRequests[convId]?.abort) return;
@@ -126,6 +132,29 @@ router.post('/:id/message', async (req, res) => {
             if (exec.success && exec.imageData) {
               sr.imageData = exec.imageData;
               images.push({ stepId: step.id, imageData: exec.imageData, imageType: exec.imageType || 'png' });
+            }
+
+            // 提取当前步骤的参数供下一步使用
+            try {
+              const codeMatch = sr.pythonCode.match(/```python\s*([\s\S]*?)\s*```/);
+              if (codeMatch) {
+                const pythonCode = codeMatch[1];
+                // 尝试从代码中提取关键参数
+                const xRangeMatch = pythonCode.match(/ax\.set_xlim\(([^,]+),\s*([^)]+)\)/);
+                const yRangeMatch = pythonCode.match(/ax\.set_ylim\(([^,]+),\s*([^)]+)\)/);
+                const titleMatch = pythonCode.match(/ax\.set_title\('([^']+)'/);
+
+                if (xRangeMatch || yRangeMatch || titleMatch) {
+                  previousParams = {
+                    xRange: xRangeMatch ? [parseFloat(xRangeMatch[1]), parseFloat(xRangeMatch[2])] : null,
+                    yRange: yRangeMatch ? [parseFloat(yRangeMatch[1]), parseFloat(yRangeMatch[2])] : null,
+                    title: titleMatch ? titleMatch[1] : null,
+                  };
+                  console.log(`[Step ${step.id}] Extracted params for next step:`, previousParams);
+                }
+              }
+            } catch (e) {
+              console.log(`[Step ${step.id}] Failed to extract params:`, e.message);
             }
           } else {
             console.log(`[Step ${step.id}] Skipping image generation`);

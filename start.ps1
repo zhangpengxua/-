@@ -21,9 +21,51 @@ try {
     exit 1
 }
 
+# 检查npm是否安装
+try {
+    $npmVersion = npm --version
+    Write-Host "npm 版本: $npmVersion" -ForegroundColor Green
+} catch {
+    Write-Host "错误: 未找到npm，请先安装Node.js" -ForegroundColor Red
+    Write-Host "下载地址: https://nodejs.org/" -ForegroundColor Yellow
+    Read-Host "按任意键退出..."
+    exit 1
+}
+
+# 检查并安装后端依赖
+Write-Host "正在检查后端依赖..." -ForegroundColor Yellow
+if (-not (Test-Path "backend\node_modules")) {
+    Write-Host "后端依赖未安装，正在安装..." -ForegroundColor Yellow
+    Set-Location "backend"
+    npm install
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "错误: 后端依赖安装失败" -ForegroundColor Red
+        Read-Host "按任意键退出..."
+        exit 1
+    }
+    Set-Location ".."
+    Write-Host "后端依赖安装完成" -ForegroundColor Green
+}
+
+# 检查并安装前端依赖
+Write-Host "正在检查前端依赖..." -ForegroundColor Yellow
+if (-not (Test-Path "frontend\node_modules")) {
+    Write-Host "前端依赖未安装，正在安装..." -ForegroundColor Yellow
+    Set-Location "frontend"
+    npm install
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "错误: 前端依赖安装失败" -ForegroundColor Red
+        Read-Host "按任意键退出..."
+        exit 1
+    }
+    Set-Location ".."
+    Write-Host "前端依赖安装完成" -ForegroundColor Green
+}
+
+Write-Host ""
 # 启动后端服务
 Write-Host "正在启动后端服务..." -ForegroundColor Yellow
-Start-Process -FilePath "cmd.exe" -ArgumentList "/k cd backend && node server.js" -WindowStyle Normal -Title "后端服务"
+Start-Process -FilePath "cmd.exe" -ArgumentList "/k cd backend && npm start" -WindowStyle Normal -Title "后端服务"
 
 # 等待后端启动
 Start-Sleep -Seconds 3

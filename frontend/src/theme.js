@@ -33,9 +33,9 @@ export const lightColors = {
 };
 
 export const darkColors = {
-  primary: "#4a9eff",
-  primaryBright: "#6db3ff",
-  primaryDeep: "#80baff",
+  primary: "#2d5a8c",
+  primaryBright: "#3d6a9c",
+  primaryDeep: "#1d4a7c",
   primarySoft: "#1a3350",
   onPrimary: "#ffffff",
   ink: "#e0e0e0",
@@ -51,8 +51,8 @@ export const darkColors = {
   charcoal: "#b0b0c8",
   hairline: "#2a2a45",
   hairlineStrong: "#3d3d60",
-  link: "#4a9eff",
-  linkPressed: "#6db3ff",
+  link: "#2d5a8c",
+  linkPressed: "#3d6a9c",
   bloomCoral: "#ff6b6b",
   bloomRose: "#3d1a1a",
   bloomDeep: "#ff6b6b",

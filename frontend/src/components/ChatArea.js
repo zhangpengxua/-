@@ -62,26 +62,79 @@ const ChatArea = ({ messages = [], isLoading, formatDate, onEditLastMessage }) =
     return parts;
   };
 
+  // 处理文本内容，识别关键步骤和答案
+  const processText = (text) => {
+    if (!text) return { parts: [] };
+    
+    const parts = [];
+    const lines = text.split('\n');
+    
+    lines.forEach(line => {
+      let cleanLine = line.replace(/^-\s*/, '').replace(/^•\s*/, '').replace(/^\*\s*/, '').trim();
+      cleanLine = cleanLine.replace(/^---+$/, '');
+      // 移除所有markdown格式
+      cleanLine = cleanLine.replace(/\*\*/g, '').replace(/__/g, '');
+      cleanLine = cleanLine.replace(/`[^`]+`/g, (match) => match.slice(1, -1));
+      cleanLine = cleanLine.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+      
+      if (!cleanLine) return;
+      
+      // 判断是否为答案行
+      let isAnswer = false;
+      let answerContent = cleanLine;
+      
+      if (cleanLine.match(/^(答[：:]|答案[：:]|解[：:]|结果[：:]|最终答案[：:])/)) {
+        isAnswer = true;
+        answerContent = cleanLine.replace(/^(答[：:]|答案[：:]|解[：:]|结果[：:]|最终答案[：:])\s*/, '');
+      } else if (cleanLine.match(/^\s*\d+\.?\d*\s*$/)) {
+        isAnswer = true;
+      }
+      
+      // 判断是否为标题/题目行
+      const isTitle = cleanLine.match(/^(Step\s+\d+:|步骤\s*\d+[:：])/);
+      
+      parts.push({
+        text: isTitle ? cleanLine.replace(/^(Step\s+\d+:|步骤\s*\d+[:：])\s*/, '') : (isAnswer ? answerContent : cleanLine),
+        isTitle,
+        isAnswer,
+        isCalculation: !isTitle && !isAnswer && (
+          cleanLine.includes('=') || 
+          cleanLine.match(/[a-zA-Z]+[\-+*/^][a-zA-Z0-9]/) ||
+          cleanLine.match(/\d+[\-+*/]\d+/)
+        ),
+        originalLine: cleanLine
+      });
+    });
+    
+    return { parts };
+  };
+
   const renderMessageContent = (content, images, stepResults) => {
     const parts = parseMessageContent(content, images, stepResults);
 
     return parts.map((part, index) => {
       switch (part.type) {
         case 'step':
+          const stepText = processText(part.description);
+          
           return (
-            <div key={`step-${index}`} style={{ marginBottom: theme.spacing.xl }}>
-              <div style={{ marginBottom: theme.spacing.sm }}>
-                <strong style={{
-                  ...theme.typography.displayXs,
-                  color: theme.colors.primary,
-                }}>
-                  步骤 {part.stepId}
-                </strong>
+            <div key={`step-${index}`} style={{ marginBottom: theme.spacing.xxl, textAlign: 'center' }}>
+              {/* 步骤标题 - 加大字号 */}
+              <div style={{ 
+                fontSize: '24px', 
+                fontWeight: 700,
+                marginBottom: theme.spacing.lg,
+                paddingBottom: theme.spacing.sm,
+                borderBottom: `2px solid ${theme.colors.primary}`,
+                color: theme.colors.ink,
+                fontFamily: "'Noto Sans SC', 'Source Han Sans SC', 'Microsoft YaHei', Arial, sans-serif",
+              }}>
+                步骤 {part.stepId}
               </div>
-
+              
               {/* 图片/3D模型显示逻辑 */}
               {part.imageData ? (
-                <div style={{ marginBottom: theme.spacing.sm, textAlign: 'center' }}>
+                <div style={{ marginBottom: theme.spacing.lg, textAlign: 'center' }}>
                   {part.imageFormat === 'gif' ? (
                     <img src={'data:image/gif;base64,' + part.imageData} alt={'步骤' + part.stepId + '图形'} style={{ maxWidth: '100%', borderRadius: theme.rounded.xl, boxShadow: theme.elevation.softLift }} />
                   ) : (
@@ -89,34 +142,111 @@ const ChatArea = ({ messages = [], isLoading, formatDate, onEditLastMessage }) =
                   )}
                 </div>
               ) : part.needImage && part.isGeometry ? (
-                <div style={{ marginBottom: theme.spacing.sm, textAlign: 'center' }}>
+                <div style={{ marginBottom: theme.spacing.lg, textAlign: 'center' }}>
                   <Interactive3DViewer shapeInfo={{ type: 'cube', dimensions: '2x2x2', properties: part.description?.substring(0, 60) }} />
                 </div>
               ) : null}
 
               <div style={{
-                ...theme.typography.bodyMd,
                 color: theme.colors.ink,
-                lineHeight: theme.typography.bodyMd.lineHeight,
+                lineHeight: 1.9,
+                fontFamily: "'Noto Sans SC', 'Source Han Sans SC', 'Microsoft YaHei', Arial, sans-serif",
               }}>
-                {part.description.split('\n').map((line, lineIdx) => (
-                  <p key={lineIdx} style={{ margin: `${theme.spacing.xxs} 0` }}>{line}</p>
+                {stepText.parts.map((linePart, lineIdx) => (
+                  <div key={lineIdx} style={{ margin: `${theme.spacing.sm} 0` }}>
+                    {linePart.isTitle ? (
+                      <div style={{ 
+                        fontSize: '20px', 
+                        fontWeight: 700,
+                        marginBottom: theme.spacing.md,
+                        paddingBottom: theme.spacing.sm,
+                        borderBottom: `1px solid ${theme.colors.hairline}`,
+                      }}>
+                        {linePart.text}
+                      </div>
+                    ) : linePart.isAnswer ? (
+                      <div style={{ 
+                        fontSize: '18px', 
+                        fontWeight: 700,
+                        display: 'inline-block',
+                        padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+                        border: `2px solid ${theme.colors.primary}`,
+                        borderRadius: theme.rounded.md,
+                        backgroundColor: theme.colors.primarySoft,
+                        margin: `${theme.spacing.md} 0`,
+                      }}>
+                        {linePart.text}
+                      </div>
+                    ) : linePart.isCalculation ? (
+                      <div style={{ 
+                        fontSize: '17px', 
+                        fontWeight: 600,
+                        margin: `${theme.spacing.md} 0`,
+                        padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+                        backgroundColor: theme.colors.cloud,
+                        borderRadius: theme.rounded.sm,
+                        display: 'inline-block',
+                      }}>
+                        {linePart.text}
+                      </div>
+                    ) : (
+                      <p style={{ fontSize: '16px', fontWeight: 400 }}>
+                        {linePart.text}
+                      </p>
+                    )}
+                  </div>
                 ))}
               </div>
             </div>
           );
         case 'text':
+          const textData = processText(part.data);
+          
           return (
-            <div key={`text-${index}`} style={{ margin: `${theme.spacing.xs} 0`, lineHeight: theme.typography.bodyMd.lineHeight }}>
-              {part.data.split('\n').map((line, lineIdx) => (
-                <p key={lineIdx} style={{ margin: `${theme.spacing.xxs} 0` }}>
-                  {line.startsWith('###') ? (
-                    <strong style={{
-                      ...theme.typography.displayXs,
-                      color: theme.colors.primary,
-                    }}>{line.replace(/^###\s*/, '')}</strong>
-                  ) : line}
-                </p>
+            <div key={`text-${index}`} style={{ margin: `${theme.spacing.sm} 0`, lineHeight: 1.9, textAlign: 'center', fontFamily: "'Noto Sans SC', 'Source Han Sans SC', 'Microsoft YaHei', Arial, sans-serif" }}>
+              {textData.parts.map((linePart, lineIdx) => (
+                <div key={lineIdx} style={{ margin: `${theme.spacing.sm} 0` }}>
+                  {linePart.isTitle ? (
+                    <div style={{ 
+                      fontSize: '20px', 
+                      fontWeight: 700,
+                      marginBottom: theme.spacing.md,
+                      paddingBottom: theme.spacing.sm,
+                      borderBottom: `1px solid ${theme.colors.hairline}`,
+                    }}>
+                      {linePart.text}
+                    </div>
+                  ) : linePart.isAnswer ? (
+                    <div style={{ 
+                      fontSize: '18px', 
+                      fontWeight: 700,
+                      display: 'inline-block',
+                      padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+                      border: `2px solid ${theme.colors.primary}`,
+                      borderRadius: theme.rounded.md,
+                      backgroundColor: theme.colors.primarySoft,
+                      margin: `${theme.spacing.md} 0`,
+                    }}>
+                      {linePart.text}
+                    </div>
+                  ) : linePart.isCalculation ? (
+                    <div style={{ 
+                      fontSize: '17px', 
+                      fontWeight: 600,
+                      margin: `${theme.spacing.md} 0`,
+                      padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+                      backgroundColor: theme.colors.cloud,
+                      borderRadius: theme.rounded.sm,
+                      display: 'inline-block',
+                    }}>
+                      {linePart.text}
+                    </div>
+                  ) : (
+                    <p style={{ fontSize: '16px', fontWeight: 400 }}>
+                      {linePart.text}
+                    </p>
+                  )}
+                </div>
               ))}
             </div>
           );

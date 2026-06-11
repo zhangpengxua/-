@@ -135,7 +135,8 @@ function App() {
       const response = await axios.get(`${API_BASE_URL}/conversations`);
       setConversations(response.data);
       if (response.data.length > 0) {
-        setCurrentConversation(response.data[0]);
+        // 调用 selectConversation 获取完整的对话数据（包含 messages）
+        selectConversation(response.data[0]._id);
       }
     } catch (error) {
       console.error('Failed to fetch conversations:', error);
@@ -188,28 +189,13 @@ function App() {
       const base64 = imageData ? imageData.split(',')[1] : null;
       if (!base64) return;
 
-      // Add user's image message to conversation
-      const userMsg = {
-        role: 'user',
-        content: '[图片上传]',
-        imageUrl: imageData || null,
-        timestamp: new Date().toISOString(),
-      };
-      const updatedConv = {
-        ...currentConversation,
-        messages: [...currentConversation.messages, userMsg],
-        updatedAt: new Date().toISOString(),
-      };
-      setCurrentConversation(updatedConv);
-      setConversations(prev => prev.map(c => (c._id === updatedConv._id ? updatedConv : c)));
-
       try {
         const ocrRes = await axios.post(`${API_BASE_URL}/ocr`, { imageBase64: base64 });
         const recognized = ocrRes.data.text || '';
         setOcrResult(recognized);
       } catch (err) {
         console.error('OCR failed:', err);
-        setOcrResult('[OCR识别失败，请手动输入题目]');
+        setOcrResult('[OCR 识别失败，请手动输入题目]');
       }
       return;
     }
@@ -217,23 +203,18 @@ function App() {
     const targetConv = currentConversation;
 
     const displayContent = ocrTextOverride
-      ? `${text}\n\n[图片OCR识别结果] ${ocrTextOverride}`
+      ? `${text}\n\n[图片 OCR 识别结果] ${ocrTextOverride}`
       : text;
 
     const userMsg = {
       role: 'user',
-      content: text || ocrTextOverride,  // Bug 2: 只显示OCR修改后的结果，不附带OCR原文
-      imageUrl: ocrTextOverride ? currentConversation.messages[currentConversation.messages.length - 1]?.imageUrl : (imageData || null),
+      content: text || ocrTextOverride || '[图片]',
+      imageUrl: ocrTextOverride ? imageData : (imageData || null),
       ocrText: ocrTextOverride || null,
       timestamp: new Date().toISOString(),
     };
 
-    // If OCR result was used, update the last image message with ocr text
     let msgs = [...targetConv.messages];
-    if (ocrTextOverride) {
-      // Replace the last [图片上传] placeholder message with the real one
-      msgs = msgs.filter(m => m.content !== '[图片上传]');
-    }
     msgs.push(userMsg);
 
     const updatedConv = {
