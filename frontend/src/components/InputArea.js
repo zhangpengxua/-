@@ -56,10 +56,12 @@ const InputArea = ({ onSendMessage, ocrResult, isLoading, onStop }) => {
       return;
     }
     if (canSubmitOcr) {
+      // 用户点击发送，提交完整的消息（包含图片和 OCR 文字）
       onSendMessage(inputValue.trim() || ocrText, imageBase64Raw, ocrText);
       setInputValue(''); setImagePreview(null); setImageBase64Raw(null);
       setOcrText(''); setIsOcrPending(false); setOcrMinDisplayed(false);
     } else if (!isOcrPending && (inputValue.trim() || imagePreview)) {
+      // 普通文本或图片消息
       onSendMessage(inputValue.trim(), imagePreview, null);
       setInputValue(''); setImagePreview(null); setImageBase64Raw(null);
     }

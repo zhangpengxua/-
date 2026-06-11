@@ -17,6 +17,30 @@ const trashIcon = (<svg width="24" height="24" viewBox="0 0 24 24" fill="none" s
  <line x1="14" y1="11" x2="14" y2="17"/>
  </svg>);
 
+// 简单的 markdown 到纯文本转换函数
+const stripMarkdown = (text) => {
+  if (!text) return '';
+  return text
+    // 移除代码块
+    .replace(/```[\s\S]*?```/g, '[代码]')
+    // 移除行内代码
+    .replace(/`[^`]*`/g, '')
+    // 移除加粗
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    // 移除斜体
+    .replace(/\*([^*]+)\*/g, '$1')
+    // 移除标题标记
+    .replace(/^#+\s+/gm, '')
+    // 移除链接
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    // 移除图片
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    // 移除多余的空白字符
+    .replace(/\n\s*\n/g, '\n')
+    .replace(/^\s+|\s+$/g, '')
+    .trim();
+};
+
 const Sidebar = ({ conversations, currentConversation, onSelectConversation, onCreateNewConversation, onDeleteConversation, isCollapsed, onToggleCollapse }) => {
   const { theme } = useContext(ThemeContext);
 
@@ -139,7 +163,7 @@ const Sidebar = ({ conversations, currentConversation, onSelectConversation, onC
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
                 }}>
-                  {conv.messages?.[conv.messages.length - 1]?.content?.substring(0, 50) || '无消息'}
+                  {stripMarkdown(conv.messages?.[conv.messages.length - 1]?.content || '无消息').substring(0, 50) || '无消息'}
                 </p>
               </div>
             )}
