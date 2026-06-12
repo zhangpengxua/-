@@ -1,6 +1,6 @@
 # AI 解题助手 (AI Math Problem Solver)
 
-基于 DeepSeek 大模型的智能解题应用，支持文字输入与图片上传，通过三层 AI 管线生成分步解题过程，并能自动生成 Python 图表辅助理解。支持浅色/深色模式切换。
+基于 Claude Sonnet 4.6 (via AIHubMix) 的智能解题应用，支持文字输入与图片上传，通过三层 AI 管线生成分步解题过程，并能自动生成 Python 图表辅助理解。支持浅色/深色模式切换。
 
 ## 技术栈
 
@@ -8,7 +8,7 @@
 |------|------|
 | **前端** | React 18, Axios, Create React App |
 | **后端** | Node.js, Express.js |
-| **AI** | DeepSeek API (deepseek-chat) |
+| **AI** | Claude Sonnet 4.6 (via AIHubMix) |
 | **OCR** | 百度 OCR API |
 | **可视化** | Python + Matplotlib (由后端自动调用) |
 
@@ -23,7 +23,7 @@
 │   ├── models/
 │   │   └── Conversation.js    # 对话数据模型 (Mongoose Schema)
 │   ├── utils/
-│   │   ├── llmService.js      # DeepSeek API 调用 + 绘图提示词模板 + JSON 验证
+│   │   ├── llmService.js      # Claude API 调用 + 绘图提示词模板 + JSON 验证
 │   │   └── ocrService.js      # 百度 OCR 文字识别
 │   └── .env                   # 环境变量（API Key 等）
 ├── frontend/
@@ -51,8 +51,8 @@
 
 当用户发送一条问题消息时，后端依次执行三层调用：
 
-1. **第一层 — 生成解题步骤**: 调用 DeepSeek 分析题目，输出结构化解题步骤（JSON）。提示词要求每步包含「目标→依据→计算过程→结果」四段，强制图形类题目优先生成图像，并控制单步描述不超过150字。
-2. **第二层 — 生成绘图代码**: 对需要图像的步骤，调用 DeepSeek 提取绘图参数，生成 Python matplotlib 代码（支持静态图、GIF 动画、3D 图形）。
+1. **第一层 — 生成解题步骤**: 调用 Claude 分析题目，输出结构化解题步骤（JSON）。提示词要求每步包含「目标→依据→计算过程→结果」四段，强制图形类题目优先生成图像，并控制单步描述不超过150字。
+2. **第二层 — 生成绘图代码**: 对需要图像的步骤，调用 Claude 提取绘图参数，生成 Python matplotlib 代码（支持静态图、GIF 动画、3D 图形）。
 3. **第三层 — 合成最终答案**: 收集所有步骤结果，按「先图后文」的格式拼接最终答案。
 
 ### OCR 图片识别流程
@@ -138,8 +138,9 @@ cd ..
 
 ```env
 PORT=5000
-DEEPSEEK_API_URL=https://api.deepseek.com/v1/chat/completions
-DEEPSEEK_API_KEY=你的DeepSeek_API_Key
+LLM_API_URL=https://aihubmix.com/v1/chat/completions
+LLM_API_KEY=你的AIHubMix_API_Key
+LLM_MODEL=claude-sonnet-4-6-1m
 BAIDU_OCR_API_KEY=你的百度OCR_API_Key
 BAIDU_OCR_SECRET_KEY=你的百度OCR_Secret_Key
 ```
@@ -171,15 +172,24 @@ cd frontend && npm start
 
 ## 更新记录
 
+### 2026-06-12
+- **双模型路由**: 普通对话/分类/标题/参数提取使用 DeepSeek V4 Pro，仅3D几何代码生成使用 Claude Sonnet 4.6
+- **交互式3D模型**: 几何类题目优先使用Three.js在浏览器中直接渲染可拖拽缩放的3D模型，不再依赖Python生成的静态PNG
+- **下标坐标解析**: 新增`x₀=1, y₀=√2, z₀=0`格式的坐标提取，自动识别点名称并构建3D顶点
+- **右键菜单删除**: 右键点击侧边栏对话弹出红色删除菜单项
+- **边自连接算法**: 多层级分组匹配连接各层环+垂直棱，小集完全图fallback确保所有点有线相连
+- **向量/分数渲染预处理**: 自动将`\vec{AB}`、`\overrightarrow{AB}`、`\frac{}{}`、`\sqrt{}`、`AC→`包裹为KaTeX可识别的`$...$`
+
 ### 2026-06-10
 - **编辑按钮移至气泡**: 修改最近一次提问的编辑按钮移至最近用户消息气泡左下角，更小更不显眼
 - **编辑后删除旧消息**: 修改提问时自动删除修改前的提示词和对应的AI回答
 - **3D模型生成修复**: 修复`extractGeometryParams`/`extractFunctionParams`/`extractAnimationParams`中JSON解析失败时返回原始对象而非Python代码的问题；在Python执行前添加`matplotlib.use('Agg')`确保无GUI环境可正常运行
+- **启动脚本修复**: 修复`start.bat`闪退问题——改用绝对路径(`%~dp0`)、增加错误提示、逐步骤显示进度
 
 ## 注意事项
 
 - 当前对话数据存储在内存中，重启后端后数据会丢失。如需持久化，可将 MongoDB 连接配置到 `backend/.env` 中的 `MONGODB_URI`。
 - Python 绘图生成的图片保存为 `/tmp/figure.png` 或 `/tmp/animation.gif`，Windows 下会自动转换为 `backend/tmp/` 目录。
-- DeepSeek API 调用超时设置为 180 秒，Python 执行超时设置为 90 秒。
-- DeepSeek 第一层 JSON 解析含自动重试机制，最多重试 2 次。
+- Claude API 调用超时设置为 180 秒，Python 执行超时设置为 90 秒。
+- Claude 第一层 JSON 解析含自动重试机制，最多重试 2 次。
 - **安全提醒**: 请勿将包含真实 API Key 的 `.env` 文件提交到公开仓库。

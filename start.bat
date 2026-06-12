@@ -1,74 +1,94 @@
 @echo off
-chcp 65001 >nul
+title AI-Start
+
 echo ===============================================
-echo          DeepSeek AI解题软件 - 一键启动
+echo          DeepSeek AI Solver - Start
 echo ===============================================
 echo.
 
-:: 检查Node.js是否安装
-node --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo 错误: 未找到Node.js，请先安装Node.js
-    echo 下载地址: https://nodejs.org/
+:: Go to script folder
+set ROOT=%~dp0
+cd /d "%ROOT%"
+
+:: Check Node.js
+echo [1/5] Checking Node.js...
+where node >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Node.js not found
+    echo Install: https://nodejs.org/
     pause
     exit /b 1
 )
+echo        Node.js OK
+echo.
 
-:: 检查npm是否安装
-npm --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo 错误: 未找到npm，请先安装Node.js
-    echo 下载地址: https://nodejs.org/
+:: Check npm
+echo [2/5] Checking npm...
+where npm >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] npm not found, reinstall Node.js
     pause
     exit /b 1
 )
+echo        npm OK
+echo.
 
-:: 检查并安装后端依赖
-echo 正在检查后端依赖...
-if not exist "backend\node_modules" (
-    echo 后端依赖未安装，正在安装...
-    cd backend
-    npm install
-    if %errorlevel% neq 0 (
-        echo 错误: 后端依赖安装失败
+:: Check backend deps
+echo [3/5] Checking backend dependencies...
+if not exist "%ROOT%backend\node_modules" (
+    echo        Installing backend deps...
+    cd /d "%ROOT%backend"
+    call npm install
+    if errorlevel 1 (
+        echo [ERROR] Backend install failed
         pause
         exit /b 1
     )
-    cd ..
-    echo 后端依赖安装完成
+    cd /d "%ROOT%"
+    echo        Done.
+) else (
+    echo        Backend deps OK
 )
+echo.
 
-:: 检查并安装前端依赖
-echo 正在检查前端依赖...
-if not exist "frontend\node_modules" (
-    echo 前端依赖未安装，正在安装...
-    cd frontend
-    npm install
-    if %errorlevel% neq 0 (
-        echo 错误: 前端依赖安装失败
+:: Check frontend deps
+if not exist "%ROOT%frontend\node_modules" (
+    echo        Installing frontend deps...
+    cd /d "%ROOT%frontend"
+    call npm install
+    if errorlevel 1 (
+        echo [ERROR] Frontend install failed
         pause
         exit /b 1
     )
-    cd ..
-    echo 前端依赖安装完成
+    cd /d "%ROOT%"
+    echo        Done.
+) else (
+    echo        Frontend deps OK
 )
-
 echo.
-echo 正在启动后端服务...
-start "后端服务" cmd /k "cd backend && npm start"
 
-:: 等待后端启动
-timeout /t 3 /nobreak >nul
-
-echo 正在启动前端服务...
-start "前端服务" cmd /k "cd frontend && npm start"
-
+:: Start backend
+echo [4/5] Starting backend (port 5000)...
+start "AI-Backend" cmd /k "cd /d %ROOT%backend && node server.js"
+echo        Waiting for backend...
+timeout /t 4 /nobreak >nul
+echo        Backend launched.
 echo.
+
+:: Start frontend
+echo [5/5] Starting frontend (port 3000)...
+start "AI-Frontend" cmd /k "cd /d %ROOT%frontend && npx react-scripts start"
+echo        Frontend launched.
+echo.
+
 echo ===============================================
-echo 服务启动完成！
+echo   All services started!
 echo.
-echo 前端地址: http://localhost:3000
-echo 后端地址: http://localhost:5000
+echo   Frontend: http://localhost:3000
+echo   Backend:  http://localhost:5000
 echo.
-echo 按任意键关闭此窗口...
+echo   Keep the two popup windows open.
+echo   Press any key to close this window...
+echo ===============================================
 pause >nul

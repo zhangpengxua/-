@@ -168,6 +168,7 @@ router.post('/:id/message', async (req, res) => {
       }
     } catch (e) {
       console.error('LLM error:', e.message);
+      console.error('LLM error detail:', e.response?.data ? JSON.stringify(e.response.data) : 'no detail');
       finalAnswer = '抱歉，服务暂时不可用。\n错误: ' + e.message;
       stepResults = [{ id: 1, description: '服务调用失败', needImage: false }];
     }
@@ -177,6 +178,10 @@ router.post('/:id/message', async (req, res) => {
     if (!conversations.find(c => c._id === convId)) return;
 
     conversation.messages.push({ role: 'assistant', content: finalAnswer, images, stepResults, timestamp: new Date() });
+    console.log('[POST] images count:', images.length, 'stepResults count:', stepResults.length);
+    for (const sr of stepResults) {
+      console.log(`[POST] step ${sr.id}: hasImg=${!!sr.imageData} needImg=${sr.needImage} imgType=${sr.imageType} codeLen=${sr.pythonCode?.length || 0} execOk=${sr.executionResult?.success} execImg=${!!sr.executionResult?.imageData}`);
+    }
 
     if (conversation.messages.length > 1) {
       try { conversation.title = (await LLMService.generateConversationTitle(conversation.messages)).trim(); } catch (e) {

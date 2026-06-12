@@ -1,6 +1,11 @@
 import { useContext } from 'react';
 import { ThemeContext } from '../theme';
 import Interactive3DViewer from './Interactive3DViewer';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 
 const userIcon = (
   <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -62,51 +67,101 @@ const ChatArea = ({ messages = [], isLoading, formatDate, onEditLastMessage }) =
     return parts;
   };
 
-  // 处理文本内容，识别关键步骤和答案
-  const processText = (text) => {
-    if (!text) return { parts: [] };
-    
-    const parts = [];
-    const lines = text.split('\n');
-    
-    lines.forEach(line => {
-      let cleanLine = line.replace(/^-\s*/, '').replace(/^•\s*/, '').replace(/^\*\s*/, '').trim();
-      cleanLine = cleanLine.replace(/^---+$/, '');
-      // 移除所有markdown格式
-      cleanLine = cleanLine.replace(/\*\*/g, '').replace(/__/g, '');
-      cleanLine = cleanLine.replace(/`[^`]+`/g, (match) => match.slice(1, -1));
-      cleanLine = cleanLine.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
-      
-      if (!cleanLine) return;
-      
-      // 判断是否为答案行
-      let isAnswer = false;
-      let answerContent = cleanLine;
-      
-      if (cleanLine.match(/^(答[：:]|答案[：:]|解[：:]|结果[：:]|最终答案[：:])/)) {
-        isAnswer = true;
-        answerContent = cleanLine.replace(/^(答[：:]|答案[：:]|解[：:]|结果[：:]|最终答案[：:])\s*/, '');
-      } else if (cleanLine.match(/^\s*\d+\.?\d*\s*$/)) {
-        isAnswer = true;
+  const markdownComponents = {
+    p: ({ children, ...props }) => <p style={{ margin: '4px 0', lineHeight: 1.6 }} {...props}>{children}</p>,
+    strong: ({ children, ...props }) => <strong style={{ fontWeight: 700, color: theme.colors.inkDeep }} {...props}>{children}</strong>,
+    em: ({ children, ...props }) => <em style={{ fontStyle: 'italic', color: theme.colors.charcoal }} {...props}>{children}</em>,
+    code: ({ children, inline, ...props }) => {
+      if (inline) {
+        return <code style={{
+          backgroundColor: theme.colors.cloud,
+          padding: '1px 5px',
+          borderRadius: '3px',
+          fontSize: '0.9em',
+          fontFamily: 'Consolas, "Courier New", monospace',
+          color: theme.colors.primaryDeep,
+        }} {...props}>{children}</code>;
       }
-      
-      // 判断是否为标题/题目行
-      const isTitle = cleanLine.match(/^(Step\s+\d+:|步骤\s*\d+[:：])/);
-      
-      parts.push({
-        text: isTitle ? cleanLine.replace(/^(Step\s+\d+:|步骤\s*\d+[:：])\s*/, '') : (isAnswer ? answerContent : cleanLine),
-        isTitle,
-        isAnswer,
-        isCalculation: !isTitle && !isAnswer && (
-          cleanLine.includes('=') || 
-          cleanLine.match(/[a-zA-Z]+[\-+*/^][a-zA-Z0-9]/) ||
-          cleanLine.match(/\d+[\-+*/]\d+/)
-        ),
-        originalLine: cleanLine
-      });
-    });
-    
-    return { parts };
+      return <code {...props}>{children}</code>;
+    },
+    pre: ({ children, ...props }) => (
+      <pre style={{
+        backgroundColor: theme.colors.cloud,
+        padding: theme.spacing.sm,
+        borderRadius: '6px',
+        overflow: 'auto',
+        fontSize: '0.85em',
+        lineHeight: 1.5,
+        margin: '8px 0',
+        border: `1px solid ${theme.colors.hairline}`,
+      }} {...props}>{children}</pre>
+    ),
+    ul: ({ children, ...props }) => <ul style={{ margin: '4px 0', paddingInlineStart: '20px', lineHeight: 1.6 }} {...props}>{children}</ul>,
+    ol: ({ children, ...props }) => <ol style={{ margin: '4px 0', paddingInlineStart: '20px', lineHeight: 1.6 }} {...props}>{children}</ol>,
+    li: ({ children, ...props }) => <li style={{ margin: '2px 0' }} {...props}>{children}</li>,
+    h1: ({ children, ...props }) => <h1 style={{ fontSize: '1.5em', fontWeight: 700, margin: '10px 0 4px', color: theme.colors.inkDeep }} {...props}>{children}</h1>,
+    h2: ({ children, ...props }) => <h2 style={{ fontSize: '1.3em', fontWeight: 700, margin: '8px 0 4px', color: theme.colors.inkDeep }} {...props}>{children}</h2>,
+    h3: ({ children, ...props }) => <h3 style={{ fontSize: '1.1em', fontWeight: 700, margin: '6px 0 4px', color: theme.colors.primary }} {...props}>{children}</h3>,
+    blockquote: ({ children, ...props }) => (
+      <blockquote style={{
+        borderLeft: `3px solid ${theme.colors.primary}`,
+        paddingLeft: theme.spacing.sm,
+        margin: '8px 0',
+        color: theme.colors.graphite,
+        backgroundColor: theme.colors.primarySoft,
+        padding: '4px 12px',
+        borderRadius: '0 4px 4px 0',
+      }} {...props}>{children}</blockquote>
+    ),
+    table: ({ children, ...props }) => (
+      <div style={{ overflow: 'auto', margin: '8px 0' }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '0.9em' }} {...props}>{children}</table>
+      </div>
+    ),
+    th: ({ children, ...props }) => (
+      <th style={{
+        border: `1px solid ${theme.colors.hairlineStrong}`,
+        padding: '4px 8px',
+        backgroundColor: theme.colors.cloud,
+        fontWeight: 700,
+        textAlign: 'left',
+      }} {...props}>{children}</th>
+    ),
+    td: ({ children, ...props }) => (
+      <td style={{
+        border: `1px solid ${theme.colors.hairline}`,
+        padding: '4px 8px',
+      }} {...props}>{children}</td>
+    ),
+  };
+
+  const renderContent = (text) => {
+    // Preprocess: wrap bare LaTeX commands in $...$ so KaTeX can render them
+    const processed = text
+      // \vec{AB} → $\vec{AB}$
+      .replace(/\\vec\{[^}]+\}/g, (m) => `$${m}$`)
+      // \overrightarrow{AB} → $\overrightarrow{AB}$
+      .replace(/\\overrightarrow\{[^}]+\}/g, (m) => `$${m}$`)
+      // \frac{a}{b} → $\frac{a}{b}$
+      .replace(/\\frac\{[^}]+\}\{[^}]+\}/g, (m) => `$${m}$`)
+      // \sqrt{x} → $\sqrt{x}$
+      .replace(/\\sqrt\{[^}]+\}/g, (m) => `$${m}$`)
+      // √x → $\sqrt{x}$
+      .replace(/√(\d+|[a-zA-Z])/g, (_, n) => `$\\sqrt{${n}}$`)
+      // \displaystyle stuff
+      .replace(/\\displaystyle\s+/g, '')
+      // AC→ → $\overrightarrow{AC}$ (arrow notation)
+      .replace(/([A-Z][\d]*)→/g, '$\\overrightarrow{$1}$');
+
+    return (
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
+        components={markdownComponents}
+      >
+        {processed}
+      </ReactMarkdown>
+    );
   };
 
   const renderMessageContent = (content, images, stepResults) => {
@@ -115,139 +170,45 @@ const ChatArea = ({ messages = [], isLoading, formatDate, onEditLastMessage }) =
     return parts.map((part, index) => {
       switch (part.type) {
         case 'step':
-          const stepText = processText(part.description);
-          
           return (
-            <div key={`step-${index}`} style={{ marginBottom: theme.spacing.xxl, textAlign: 'center' }}>
-              {/* 步骤标题 - 加大字号 */}
-              <div style={{ 
-                fontSize: '24px', 
+            <div key={`step-${index}`} style={{ marginBottom: theme.spacing.lg }}>
+              <div style={{
+                fontSize: '18px',
                 fontWeight: 700,
-                marginBottom: theme.spacing.lg,
-                paddingBottom: theme.spacing.sm,
-                borderBottom: `2px solid ${theme.colors.primary}`,
-                color: theme.colors.ink,
-                fontFamily: "'Noto Sans SC', 'Source Han Sans SC', 'Microsoft YaHei', Arial, sans-serif",
+                color: theme.colors.primary,
+                marginBottom: theme.spacing.sm,
+                paddingBottom: theme.spacing.xs,
+                borderBottom: `1px solid ${theme.colors.hairline}`,
               }}>
                 步骤 {part.stepId}
               </div>
-              
-              {/* 图片/3D模型显示逻辑 */}
-              {part.imageData ? (
-                <div style={{ marginBottom: theme.spacing.lg, textAlign: 'center' }}>
-                  {part.imageFormat === 'gif' ? (
-                    <img src={'data:image/gif;base64,' + part.imageData} alt={'步骤' + part.stepId + '图形'} style={{ maxWidth: '100%', borderRadius: theme.rounded.xl, boxShadow: theme.elevation.softLift }} />
-                  ) : (
-                    <img src={'data:image/png;base64,' + part.imageData} alt={'步骤' + part.stepId + '图形'} style={{ maxWidth: '100%', borderRadius: theme.rounded.xl, boxShadow: theme.elevation.softLift }} />
-                  )}
+
+              {part.isGeometry ? (
+                <div style={{ marginBottom: theme.spacing.sm, textAlign: 'center' }}>
+                  <Interactive3DViewer description={part.description} />
                 </div>
-              ) : part.needImage && part.isGeometry ? (
-                <div style={{ marginBottom: theme.spacing.lg, textAlign: 'center' }}>
-                  <Interactive3DViewer shapeInfo={{ type: 'cube', dimensions: '2x2x2', properties: part.description?.substring(0, 60) }} />
+              ) : part.imageData ? (
+                <div style={{ marginBottom: theme.spacing.sm, textAlign: 'center' }}>
+                  {part.imageFormat === 'gif' ? (
+                    <img src={'data:image/gif;base64,' + part.imageData} alt={'步骤' + part.stepId} style={{ maxWidth: '100%', borderRadius: theme.rounded.xl, boxShadow: theme.elevation.softLift }} />
+                  ) : (
+                    <img src={'data:image/png;base64,' + part.imageData} alt={'步骤' + part.stepId} style={{ maxWidth: '100%', borderRadius: theme.rounded.xl, boxShadow: theme.elevation.softLift }} />
+                  )}
                 </div>
               ) : null}
 
               <div style={{
+                ...theme.typography.bodyMd,
                 color: theme.colors.ink,
-                lineHeight: 1.9,
-                fontFamily: "'Noto Sans SC', 'Source Han Sans SC', 'Microsoft YaHei', Arial, sans-serif",
               }}>
-                {stepText.parts.map((linePart, lineIdx) => (
-                  <div key={lineIdx} style={{ margin: `${theme.spacing.sm} 0` }}>
-                    {linePart.isTitle ? (
-                      <div style={{ 
-                        fontSize: '20px', 
-                        fontWeight: 700,
-                        marginBottom: theme.spacing.md,
-                        paddingBottom: theme.spacing.sm,
-                        borderBottom: `1px solid ${theme.colors.hairline}`,
-                      }}>
-                        {linePart.text}
-                      </div>
-                    ) : linePart.isAnswer ? (
-                      <div style={{ 
-                        fontSize: '18px', 
-                        fontWeight: 700,
-                        display: 'inline-block',
-                        padding: `${theme.spacing.sm} ${theme.spacing.md}`,
-                        border: `2px solid ${theme.colors.primary}`,
-                        borderRadius: theme.rounded.md,
-                        backgroundColor: theme.colors.primarySoft,
-                        margin: `${theme.spacing.md} 0`,
-                      }}>
-                        {linePart.text}
-                      </div>
-                    ) : linePart.isCalculation ? (
-                      <div style={{ 
-                        fontSize: '17px', 
-                        fontWeight: 600,
-                        margin: `${theme.spacing.md} 0`,
-                        padding: `${theme.spacing.sm} ${theme.spacing.md}`,
-                        backgroundColor: theme.colors.cloud,
-                        borderRadius: theme.rounded.sm,
-                        display: 'inline-block',
-                      }}>
-                        {linePart.text}
-                      </div>
-                    ) : (
-                      <p style={{ fontSize: '16px', fontWeight: 400 }}>
-                        {linePart.text}
-                      </p>
-                    )}
-                  </div>
-                ))}
+                {renderContent(part.description)}
               </div>
             </div>
           );
         case 'text':
-          const textData = processText(part.data);
-          
           return (
-            <div key={`text-${index}`} style={{ margin: `${theme.spacing.sm} 0`, lineHeight: 1.9, textAlign: 'center', fontFamily: "'Noto Sans SC', 'Source Han Sans SC', 'Microsoft YaHei', Arial, sans-serif" }}>
-              {textData.parts.map((linePart, lineIdx) => (
-                <div key={lineIdx} style={{ margin: `${theme.spacing.sm} 0` }}>
-                  {linePart.isTitle ? (
-                    <div style={{ 
-                      fontSize: '20px', 
-                      fontWeight: 700,
-                      marginBottom: theme.spacing.md,
-                      paddingBottom: theme.spacing.sm,
-                      borderBottom: `1px solid ${theme.colors.hairline}`,
-                    }}>
-                      {linePart.text}
-                    </div>
-                  ) : linePart.isAnswer ? (
-                    <div style={{ 
-                      fontSize: '18px', 
-                      fontWeight: 700,
-                      display: 'inline-block',
-                      padding: `${theme.spacing.sm} ${theme.spacing.md}`,
-                      border: `2px solid ${theme.colors.primary}`,
-                      borderRadius: theme.rounded.md,
-                      backgroundColor: theme.colors.primarySoft,
-                      margin: `${theme.spacing.md} 0`,
-                    }}>
-                      {linePart.text}
-                    </div>
-                  ) : linePart.isCalculation ? (
-                    <div style={{ 
-                      fontSize: '17px', 
-                      fontWeight: 600,
-                      margin: `${theme.spacing.md} 0`,
-                      padding: `${theme.spacing.sm} ${theme.spacing.md}`,
-                      backgroundColor: theme.colors.cloud,
-                      borderRadius: theme.rounded.sm,
-                      display: 'inline-block',
-                    }}>
-                      {linePart.text}
-                    </div>
-                  ) : (
-                    <p style={{ fontSize: '16px', fontWeight: 400 }}>
-                      {linePart.text}
-                    </p>
-                  )}
-                </div>
-              ))}
+            <div key={`text-${index}`} style={{ lineHeight: 1.5 }}>
+              {renderContent(part.data)}
             </div>
           );
         default:
@@ -265,9 +226,9 @@ const ChatArea = ({ messages = [], isLoading, formatDate, onEditLastMessage }) =
         flexShrink: 0,
       }}>
         <h2 style={{ ...theme.typography.displayXs, color: theme.colors.ink, margin: 0 }}>
-          解题对话
+          AI 解题助手
         </h2>
-        <p style={{ ...theme.typography.captionMd, color: theme.colors.graphite, margin: `${theme.spacing.xxs} 0 0 0` }}>
+        <p style={{ ...theme.typography.captionMd, color: theme.colors.graphite, margin: '2px 0 0 0' }}>
           智能解题助手，助你轻松解决数学问题
         </p>
       </div>
@@ -283,12 +244,12 @@ const ChatArea = ({ messages = [], isLoading, formatDate, onEditLastMessage }) =
               <div style={{ width: '32px', height: '32px', borderRadius: theme.rounded.lg, backgroundColor: theme.colors.fog, display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.colors.graphite }}>
                 {botIcon}
               </div>
-              <span style={{ ...theme.typography.bodyEmphasis, color: theme.colors.ink }}>AI助手</span>
+              <span style={{ ...theme.typography.bodyEmphasis, color: theme.colors.ink }}>AI 解题助手</span>
             </div>
             <div style={{ ...theme.typography.bodyMd, color: theme.colors.ink }}>
-              <p>你好！我是你的AI解题助手。请输入数学问题，我会帮你一步步解答。</p>
+              <p>你好！我是 AI 解题助手，输入数学问题我会一步步为你解答。</p>
               <p style={{ marginTop: theme.spacing.sm }}>支持的功能：</p>
-              <ul style={{ marginLeft: theme.spacing.md, marginTop: theme.spacing.xxs }}>
+              <ul style={{ marginLeft: theme.spacing.md, marginTop: '2px' }}>
                 <li>文字问题输入</li>
                 <li>图片上传（支持OCR识别）</li>
                 <li>分步解题</li>
@@ -327,20 +288,20 @@ const ChatArea = ({ messages = [], isLoading, formatDate, onEditLastMessage }) =
                 ...theme.typography.bodyEmphasis,
                 color: message.role === 'user' ? theme.colors.onPrimary : theme.colors.ink,
               }}>
-                {message.role === 'user' ? '你' : 'AI助手'}
+                {message.role === 'user' ? '你' : 'AI 解题助手'}
               </span>
             </div>
 
             <div style={{
               fontSize: theme.typography.bodyMd.fontSize,
-              lineHeight: theme.typography.bodyMd.lineHeight,
+              lineHeight: 1.5,
               color: message.role === 'user' ? theme.colors.onPrimary : theme.colors.ink,
             }}>
               {renderMessageContent(message.content, message.images, message.stepResults)}
             </div>
 
             {message.imageUrl && (
-              <img src={message.imageUrl} alt="上传图片" style={{ maxWidth: '100%', borderRadius: theme.rounded.lg, marginTop: theme.spacing.sm }} />
+              <img src={message.imageUrl} alt="uploaded" style={{ maxWidth: '100%', borderRadius: theme.rounded.lg, marginTop: theme.spacing.sm }} />
             )}
 
             <div style={{

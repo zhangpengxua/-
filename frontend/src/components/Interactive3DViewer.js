@@ -1,331 +1,283 @@
-import { useEffect, useRef, useState } from 'react';
+import { useMemo } from 'react';
+import { Canvas } from '@react-three/fiber';
+import { OrbitControls, Line, Text } from '@react-three/drei';
 
-const Interactive3DViewer = ({ shapeInfo }) => {
-  const containerRef = useRef(null);
-  const canvasRef = useRef(null);
-  const rotationRef = useRef({ x: 0.3, y: 0.5 });
-  const zoomRef = useRef(1.0);
-  const isDragging = useRef(false);
-  const lastMousePos = useRef({ x: 0, y: 0 });
-  const animationRef = useRef(null);
-  const [autoRotate, setAutoRotate] = useState(true);
+function tryParseFloat(s) {
+  // Handle expressions like "√3+1", "√2", "2√3", "1+√3"
+  let cleaned = s.trim();
+  // Replace \sqrt{X} and √X with numeric approximations
+  cleaned = cleaned.replace(/\\sqrt\{(\d+)\}/g, (_, n) => Math.sqrt(parseFloat(n)).toFixed(6));
+  cleaned = cleaned.replace(/√(\d+)/g, (_, n) => Math.sqrt(parseFloat(n)).toFixed(6));
+  // Evaluate simple + - * expressions
+  try {
+    const val = Function('"use strict"; return (' + cleaned + ')')();
+    if (typeof val === 'number' && !isNaN(val)) return val;
+  } catch (e) { /* fall through */ }
+  return parseFloat(cleaned);
+}
 
-  const width = 500;
-  const height = 400;
+function parseGeometry(description) {
+  const result = { points: [], lines: [] };
+  if (!description) return result;
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-
-    const project = (x, y, z) => {
-      const scale = 200 * zoomRef.current;
-      const cx = width / 2;
-      const cy = height / 2;
-      const f = 300;
-      const scaleZ = f / (f + z);
-      return {
-        x: cx + x * scale * scaleZ,
-        y: cy - y * scale * scaleZ
-      };
-    };
-
-    const getShapeVertices = () => {
-      const shapeType = shapeInfo?.type || 'cube';
-      const size = shapeInfo?.dimensions ? parseFloat(shapeInfo.dimensions.split('x')[0]) : 3;
-      const halfSize = size / 2;
-
-      switch (shapeType) {
-        case 'sphere':
-          return generateSphereVertices(halfSize);
-        case 'pyramid':
-          return [
-            { x: 0, y: size, z: 0 },
-            { x: -size, y: -size, z: -size },
-            { x: size, y: -size, z: -size },
-            { x: size, y: -size, z: size },
-            { x: -size, y: -size, z: size }
-          ];
-        case 'cylinder':
-          return generateCylinderVertices(halfSize);
-        case 'cone':
-          return generateConeVertices(halfSize);
-        case 'cube':
-        default:
-          return [
-            { x: -halfSize, y: -halfSize, z: -halfSize },
-            { x: halfSize, y: -halfSize, z: -halfSize },
-            { x: halfSize, y: halfSize, z: -halfSize },
-            { x: -halfSize, y: halfSize, z: -halfSize },
-            { x: -halfSize, y: -halfSize, z: halfSize },
-            { x: halfSize, y: -halfSize, z: halfSize },
-            { x: halfSize, y: halfSize, z: halfSize },
-            { x: -halfSize, y: halfSize, z: halfSize }
-          ];
+  // 1.5. NEW: Parse subscript-style coordinate assignments like "x₀ = 1", "y₀ = √2", "z₀ = 0"
+  // These come from AI describing point O or similar without using O(x,y,z) format.
+  const subscriptCoordRegex = /([xyz])\s*[₀₁₂₃₄₅₆₇₈₉\d]*\s*=\s*(-?[^\s,，;]+)/gi;
+  const coordAssignments = { x: [], y: [], z: [] };
+  let sm;
+  while ((sm = subscriptCoordRegex.exec(description)) !== null) {
+    const axis = sm[1].toLowerCase();
+    const val = tryParseFloat(sm[2]);
+    if (!isNaN(val)) coordAssignments[axis].push(val);
+  }
+  // If we found at least one set of {x, y, z} assignments and haven't parsed any points yet, create one
+  if (result.points.length === 0 && coordAssignments.x.length > 0 && coordAssignments.y.length > 0 && coordAssignments.z.length > 0) {
+    // Look for point names near these coordinates
+    const pointNameRegex = /([A-Z][\d]*)\s*(?:的|的?坐标|点)\s*(?:为|是|：|:)/g;
+    let pn;
+    const pointNames = [];
+    while ((pn = pointNameRegex.exec(description)) !== null) {
+      if (!pointNames.includes(pn[1]) && pn[1].length <= 3) pointNames.push(pn[1]);
+    }
+    // If no explicit point name found, look for single capital letters
+    if (pointNames.length === 0) {
+      const singleCapitalRegex = /\b([A-Z])(?!\w)/g;
+      let sc;
+      while ((sc = singleCapitalRegex.exec(description)) !== null) {
+        if (!['A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z'].includes(sc[1])) continue;
+        if (!pointNames.includes(sc[1])) pointNames.push(sc[1]);
       }
-    };
-
-    const generateSphereVertices = (radius) => {
-      const vertices = [];
-      const latBands = 15;
-      const longBands = 15;
-      for (let lat = 0; lat <= latBands; lat++) {
-        const theta1 = (lat * Math.PI) / latBands;
-        for (let lon = 0; lon <= longBands; lon++) {
-          const theta2 = (lon * 2 * Math.PI) / longBands;
-          vertices.push({
-            x: radius * Math.sin(theta1) * Math.cos(theta2),
-            y: radius * Math.cos(theta1),
-            z: radius * Math.sin(theta1) * Math.sin(theta2)
-          });
-        }
+    }
+    // Use the last x,y,z assignment (most likely the fully resolved values)
+    const x = coordAssignments.x[coordAssignments.x.length - 1];
+    const y = coordAssignments.y[coordAssignments.y.length - 1];
+    const z = coordAssignments.z[coordAssignments.z.length - 1];
+    if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
+      const name = pointNames.length > 0 ? pointNames[0] : 'O';
+      if (!result.points.find(p => p.name === name)) {
+        result.points.push({ name, x, y, z });
       }
-      return vertices;
-    };
+    }
+  }
 
-    const generateCylinderVertices = (radius) => {
-      const vertices = [];
-      const sides = 12;
-      for (let i = 0; i < sides; i++) {
-        const angle = (i * 2 * Math.PI) / sides;
-        vertices.push({ x: radius * Math.cos(angle), y: -radius, z: radius * Math.sin(angle) });
-        vertices.push({ x: radius * Math.cos(angle), y: radius, z: radius * Math.sin(angle) });
+  // 1. First pass: extract ALL coordinate-like patterns in the text
+  // Match patterns like: A(0,0,0), C(2,√2,0), P(0,0,√2), D(√3+1, 0, 0)
+  // More permissive regex: name followed by (x, y, z) where x/y/z may contain √, \, etc
+  const coordRegex = /([A-Z][\d]*)\s*[=(]?\s*\(\s*(-?[^,，)]+?)\s*[,，]\s*(-?[^,，)]+?)\s*[,，]\s*(-?[^,，)]+?)\s*\)/g;
+  let m;
+  while ((m = coordRegex.exec(description)) !== null) {
+    const name = m[1];
+    const x = tryParseFloat(m[2]);
+    const y = tryParseFloat(m[3]);
+    const z = tryParseFloat(m[4]);
+    if (!isNaN(x) && !isNaN(y) && !isNaN(z) && !result.points.find(p => p.name === name)) {
+      result.points.push({ name, x, y, z });
+    }
+  }
+
+  // 2. Extract edges from the description text
+  const edgeRegex = /([A-Z][\d]*\d?)\s*[-–—→→]+\s*([A-Z][\d]*)/g;
+  let em;
+  while ((em = edgeRegex.exec(description)) !== null) {
+    if (!result.lines.find(l => l[0] === em[1] && l[1] === em[2])) {
+      result.lines.push([em[1], em[2]]);
+    }
+  }
+
+  // 3. Also try semicolon-separated format (legacy)
+  const semiParts = description.split(/[;；]/).map(s => s.trim()).filter(Boolean);
+  for (const part of semiParts) {
+    const clean = part.replace(/^[-*•]\s*/, '').trim();
+    if (!clean) continue;
+    // Also try vertex in semicolon format
+    const ptMatch = clean.match(/([A-Z][\d]*)\s*\(\s*(-?[^,，()]+)\s*[,，]\s*(-?[^,，()]+)\s*[,，]\s*(-?[^,，)]+)\s*\)/);
+    if (ptMatch) {
+      const name = ptMatch[1];
+      const x = tryParseFloat(ptMatch[2]);
+      const y = tryParseFloat(ptMatch[3]);
+      const z = tryParseFloat(ptMatch[4]);
+      if (!isNaN(x) && !isNaN(y) && !isNaN(z) && !result.points.find(p => p.name === name)) {
+        result.points.push({ name, x, y, z });
       }
-      return vertices;
-    };
-
-    const generateConeVertices = (radius) => {
-      const vertices = [];
-      const sides = 12;
-      vertices.push({ x: 0, y: radius, z: 0 });
-      for (let i = 0; i < sides; i++) {
-        const angle = (i * 2 * Math.PI) / sides;
-        vertices.push({ x: radius * Math.cos(angle), y: -radius, z: radius * Math.sin(angle) });
+    }
+    // Edge
+    const edgeMatch = clean.match(/^([A-Z][\d]*)\s*[-–—→]+\s*([A-Z][\d]*)$/);
+    if (edgeMatch) {
+      if (!result.lines.find(l => l[0] === edgeMatch[1] && l[1] === edgeMatch[2])) {
+        result.lines.push([edgeMatch[1], edgeMatch[2]]);
       }
-      return vertices;
-    };
+    }
+  }
 
-    const getFaces = () => {
-      const shapeType = shapeInfo?.type || 'cube';
-      switch (shapeType) {
-        case 'sphere':
-          return generateSphereFaces();
-        case 'pyramid':
-          return [[0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 1], [1, 2, 3, 4]];
-        case 'cylinder':
-          const cylFaces = [];
-          for (let i = 0; i < 12; i++) {
-            cylFaces.push([i * 2, (i * 2 + 1) % 24, ((i + 1) * 2 + 1) % 24, ((i + 1) * 2) % 24]);
+  // 4. Auto-connect if we have points but no edges
+  if (result.lines.length === 0 && result.points.length >= 2) {
+    const names = result.points.map(p => p.name);
+
+    // Heuristic 1: points ending with '1' are top layer, matching base layer
+    const hasNumbered = names.some(n => /\d$/.test(n));
+    if (hasNumbered) {
+      const groups = {};
+      for (const n of names) {
+        const suffix = n.match(/(\d+)$/);
+        const key = suffix ? suffix[1] : '0';
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(n);
+      }
+      const levels = Object.keys(groups).sort();
+      if (levels.length >= 2) {
+        // Connect each ring and verticals between consecutive levels
+        for (const lv of levels) {
+          const pts = groups[lv].sort();
+          for (let i = 0; i < pts.length; i++) {
+            result.lines.push([pts[i], pts[(i + 1) % pts.length]]);
           }
-          const top = [], bottom = [];
-          for (let i = 0; i < 12; i++) { top.push(i * 2 + 1); bottom.push(i * 2); }
-          cylFaces.push(top, bottom);
-          return cylFaces;
-        case 'cone':
-          const coneFaces = [];
-          for (let i = 0; i < 12; i++) coneFaces.push([0, i + 1, ((i + 1) % 12) + 1]);
-          coneFaces.push(Array.from({ length: 12 }, (_, i) => i + 1));
-          return coneFaces;
-        case 'cube':
-        default:
-          return [[0, 1, 2, 3], [4, 5, 6, 7], [0, 4, 7, 3], [1, 5, 6, 2], [3, 2, 6, 7], [0, 1, 5, 4]];
-      }
-    };
-
-    const generateSphereFaces = () => {
-      const faces = [];
-      const lats = 15, longs = 15;
-      for (let lat = 0; lat < lats; lat++) {
-        for (let lon = 0; lon < longs; lon++) {
-          const v1 = lat * (longs + 1) + lon, v2 = v1 + 1, v3 = v1 + longs + 1, v4 = v3 + 1;
-          faces.push([v1, v2, v4, v3]);
+        }
+        // Connect between levels: match by base name (strip suffix)
+        const base = groups[levels[0]].sort();
+        for (let li = 1; li < levels.length; li++) {
+          const upper = groups[levels[li]].sort();
+          const count = Math.min(base.length, upper.length);
+          for (let i = 0; i < count; i++) {
+            result.lines.push([base[i], upper[i]]);
+          }
         }
       }
-      return faces;
-    };
+    }
 
-    const rotatePoint = (point, rx, ry) => {
-      const cosX = Math.cos(rx), sinX = Math.sin(rx), cosY = Math.cos(ry), sinY = Math.sin(ry);
-      const y1 = point.y * cosX - point.z * sinX;
-      const z1 = point.y * sinX + point.z * cosX;
-      const x2 = point.x * cosY + z1 * sinY;
-      const z2 = -point.x * sinY + z1 * cosY;
-      return { x: x2, y: y1, z: z2 };
-    };
-
-    const getFaceDepth = (face, vertices, rx, ry) => {
-      let avgZ = 0;
-      face.forEach(i => { const r = rotatePoint(vertices[i], rx, ry); avgZ += r.z; });
-      return avgZ / face.length;
-    };
-
-    const draw = () => {
-      ctx.clearRect(0, 0, width, height);
-
-      const vertices = getShapeVertices();
-      const faces = getFaces();
-      const rx = rotationRef.current.x;
-      const ry = rotationRef.current.y;
-
-      // Grid
-      ctx.strokeStyle = 'rgba(100, 100, 150, 0.3)';
-      ctx.lineWidth = 1;
-      const gridSize = 20, gridCount = 10;
-      for (let i = -gridCount; i <= gridCount; i++) {
-        const pos = project(i * gridSize, 0, 0);
-        ctx.beginPath(); ctx.moveTo(0, pos.y); ctx.lineTo(width, pos.y); ctx.stroke();
-        const pos2 = project(0, 0, i * gridSize);
-        ctx.beginPath(); ctx.moveTo(pos2.x, 0); ctx.lineTo(pos2.x, height); ctx.stroke();
-      }
-
-      const sortedFaces = faces.slice().sort((a, b) =>
-        getFaceDepth(b, vertices, rx, ry) - getFaceDepth(a, vertices, rx, ry)
-      );
-
-      sortedFaces.forEach((face) => {
-        const projectedPoints = face.map(i => {
-          const r = rotatePoint(vertices[i], rx, ry);
-          return project(r.x, r.y, r.z);
-        });
-        const avgDepth = getFaceDepth(face, vertices, rx, ry);
-        const intensity = Math.max(0.3, Math.min(1, 0.7 + avgDepth / 5));
-        ctx.beginPath();
-        ctx.fillStyle = `rgba(100, 150, 255, ${intensity})`;
-        ctx.strokeStyle = `rgba(150, 200, 255, ${intensity})`;
-        ctx.lineWidth = 2;
-        ctx.moveTo(projectedPoints[0].x, projectedPoints[0].y);
-        for (let i = 1; i < projectedPoints.length; i++) ctx.lineTo(projectedPoints[i].x, projectedPoints[i].y);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-      });
-
-      // Axes
-      const axisLength = 4;
-      const axes = [
-        { x: axisLength, y: 0, z: 0, color: '#ff4444', label: 'X' },
-        { x: 0, y: axisLength, z: 0, color: '#44ff44', label: 'Y' },
-        { x: 0, y: 0, z: axisLength, color: '#4444ff', label: 'Z' }
-      ];
-      axes.forEach(axis => {
-        const start = project(0, 0, 0);
-        const end = rotatePoint(axis, rx, ry);
-        const endProj = project(end.x, end.y, end.z);
-        ctx.beginPath();
-        ctx.strokeStyle = axis.color; ctx.lineWidth = 3;
-        ctx.moveTo(start.x, start.y); ctx.lineTo(endProj.x, endProj.y); ctx.stroke();
-        const angle = Math.atan2(endProj.y - start.y, endProj.x - start.x);
-        const as = 15;
-        ctx.beginPath();
-        ctx.moveTo(endProj.x, endProj.y);
-        ctx.lineTo(endProj.x - as * Math.cos(angle - Math.PI / 6), endProj.y - as * Math.sin(angle - Math.PI / 6));
-        ctx.moveTo(endProj.x, endProj.y);
-        ctx.lineTo(endProj.x - as * Math.cos(angle + Math.PI / 6), endProj.y - as * Math.sin(angle + Math.PI / 6));
-        ctx.stroke();
-        ctx.fillStyle = axis.color; ctx.font = 'bold 14px Arial';
-        ctx.fillText(axis.label, endProj.x + 5, endProj.y - 5);
-      });
-
-      if (autoRotate && !isDragging.current) {
-        rotationRef.current.y += 0.01;
-      }
-      animationRef.current = requestAnimationFrame(draw);
-    };
-
-    draw();
-
-    const handleMouseDown = (e) => {
-      isDragging.current = true;
-      lastMousePos.current = { x: e.clientX, y: e.clientY };
-    };
-    const handleMouseMove = (e) => {
-      if (!isDragging.current) return;
-      const dx = e.clientX - lastMousePos.current.x;
-      const dy = e.clientY - lastMousePos.current.y;
-      rotationRef.current.y += dx * 0.01;
-      rotationRef.current.x += dy * 0.01;
-      rotationRef.current.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, rotationRef.current.x));
-      lastMousePos.current = { x: e.clientX, y: e.clientY };
-    };
-    const handleMouseUp = () => { isDragging.current = false; };
-    const handleMouseLeave = () => { isDragging.current = false; };
-
-    // Scroll zoom
-    const handleWheel = (e) => {
-      e.preventDefault();
-      zoomRef.current *= (e.deltaY > 0 ? 0.9 : 1.1);
-      zoomRef.current = Math.max(0.3, Math.min(5.0, zoomRef.current));
-    };
-
-    // Touch
-    const handleTouchStart = (e) => {
-      if (e.touches.length === 1) {
-        isDragging.current = true;
-        lastMousePos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-      } else if (e.touches.length === 2) {
-        isDragging.current = false;
-        lastMousePos.current = { x: -1, y: -1 };
-      }
-    };
-    const handleTouchMove = (e) => {
-      if (e.touches.length === 1 && isDragging.current) {
-        const dx = e.touches[0].clientX - lastMousePos.current.x;
-        const dy = e.touches[0].clientY - lastMousePos.current.y;
-        rotationRef.current.y += dx * 0.01;
-        rotationRef.current.x += dy * 0.01;
-        rotationRef.current.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, rotationRef.current.x));
-        lastMousePos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-      } else if (e.touches.length === 2) {
-        const dx = e.touches[0].clientX - e.touches[1].clientX;
-        const dy = e.touches[0].clientY - e.touches[1].clientY;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (lastMousePos.current.x > 0) {
-          zoomRef.current *= dist / lastMousePos.current.x;
-          zoomRef.current = Math.max(0.3, Math.min(5.0, zoomRef.current));
+    // Heuristic 2: still no edges? Connect all points pairwise by proximity for small sets
+    if (result.lines.length === 0 && result.points.length <= 6) {
+      const pts = result.points;
+      // Connect all pairs (complete graph) — simple and always shows something
+      for (let i = 0; i < pts.length; i++) {
+        for (let j = i + 1; j < pts.length; j++) {
+          result.lines.push([pts[i].name, pts[j].name]);
         }
-        lastMousePos.current.x = dist;
       }
-    };
-    const handleTouchEnd = () => { isDragging.current = false; };
+    }
 
-    canvas.addEventListener('mousedown', handleMouseDown);
-    canvas.addEventListener('mousemove', handleMouseMove);
-    canvas.addEventListener('mouseup', handleMouseUp);
-    canvas.addEventListener('mouseleave', handleMouseLeave);
-    canvas.addEventListener('wheel', handleWheel, { passive: false });
-    canvas.addEventListener('touchstart', handleTouchStart);
-    canvas.addEventListener('touchmove', handleTouchMove);
-    canvas.addEventListener('touchend', handleTouchEnd);
+    // Heuristic 3: chain + close ring for any number of points if still no edges
+    if (result.lines.length === 0) {
+      const ptNames = result.points.map(p => p.name);
+      for (let i = 0; i < ptNames.length - 1; i++) {
+        result.lines.push([ptNames[i], ptNames[i + 1]]);
+      }
+      if (ptNames.length >= 3) {
+        result.lines.push([ptNames[ptNames.length - 1], ptNames[0]]);
+      }
+    }
+  }
 
-    return () => {
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
-      canvas.removeEventListener('mousedown', handleMouseDown);
-      canvas.removeEventListener('mousemove', handleMouseMove);
-      canvas.removeEventListener('mouseup', handleMouseUp);
-      canvas.removeEventListener('mouseleave', handleMouseLeave);
-      canvas.removeEventListener('wheel', handleWheel);
-      canvas.removeEventListener('touchstart', handleTouchStart);
-      canvas.removeEventListener('touchmove', handleTouchMove);
-      canvas.removeEventListener('touchend', handleTouchEnd);
-    };
-  }, [shapeInfo, autoRotate]);
+  return result;
+}
+
+function ThreeGeometry({ geoData }) {
+  const pointMap = useMemo(() => {
+    const map = {};
+    for (const pt of geoData.points) map[pt.name] = [pt.x, pt.y, pt.z];
+    return map;
+  }, [geoData.points]);
+
+  const linePairs = useMemo(() =>
+    geoData.lines.map(([a, b]) => {
+      const pa = pointMap[a], pb = pointMap[b];
+      if (!pa || !pb) return null;
+      return { key: `${a}-${b}`, start: pa, end: pb };
+    }).filter(Boolean),
+  [geoData.lines, pointMap]);
+
+  // Bright visible colors for edges
+  const edgeColors = ['#ff6b6b', '#ffd93d', '#6bcb77', '#4d96ff', '#ff922b', '#cc5de8'];
+  const sphereColors = ['#ff4757', '#ff6348', '#ffa502', '#eccc68', '#7bed9f', '#70a1ff'];
 
   return (
-    <div ref={containerRef} style={{
-      width: '100%', maxWidth: '600px', margin: '16px auto',
-      borderRadius: '12px', overflow: 'hidden',
-      boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)', backgroundColor: '#1a1a2e'
+    <group>
+      {linePairs.map(({ key, start, end }, idx) => (
+        <Line key={key} points={[start, end]} color={edgeColors[idx % edgeColors.length]} lineWidth={3} />
+      ))}
+      {geoData.points.map((pt, idx) => (
+        <group key={pt.name}>
+          <mesh position={[pt.x, pt.z, -pt.y]}>
+            <sphereGeometry args={[0.12, 16, 16]} />
+            <meshStandardMaterial color={sphereColors[idx % sphereColors.length]} />
+          </mesh>
+          <Text position={[pt.x + 0.2, pt.z + 0.2, -pt.y + 0.2]} fontSize={0.28} color="#ffffff" fontWeight="bold">
+            {pt.name}
+          </Text>
+        </group>
+      ))}
+    </group>
+  );
+}
+
+function Axes() {
+  return (
+    <group>
+      {/* X: right → (+1, 0, 0) */}
+      <Line points={[[0,0,0],[5,0,0]]} color="#ff4444" lineWidth={2} />
+      <Text position={[5.3, 0, 0]} fontSize={0.4} color="#ff4444" fontWeight="bold">X</Text>
+      {/* Y: away/up → (0, 1, 0) */}
+      <Line points={[[0,0,0],[0,5,0]]} color="#44ff44" lineWidth={2} />
+      <Text position={[0, 5.3, 0]} fontSize={0.4} color="#44ff44" fontWeight="bold">Y</Text>
+      {/* Z: up → (0, 0, 5) */}
+      <Line points={[[0,0,0],[0,0,5]]} color="#4488ff" lineWidth={2} />
+      <Text position={[0, 0, 5.3]} fontSize={0.4} color="#4488ff" fontWeight="bold">Z</Text>
+    </group>
+  );
+}
+
+function GridPlane() {
+  return (
+    <group>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]}>
+        <planeGeometry args={[20, 20]} />
+        <meshBasicMaterial color="#2a2a4a" side={2} transparent opacity={0.3} />
+      </mesh>
+      <gridHelper args={[20, 20, '#444', '#333']} />
+    </group>
+  );
+}
+
+const Interactive3DViewer = ({ description }) => {
+  const geoData = useMemo(() => parseGeometry(description), [description]);
+
+  if (geoData.points.length < 2) {
+    return (
+      <div style={{
+        width: '100%', maxWidth: '700px', margin: '16px auto',
+        borderRadius: '12px', overflow: 'hidden',
+        boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+        backgroundColor: '#1a1a2e', padding: '32px',
+        textAlign: 'center', color: '#888',
+      }}>
+        <p style={{ color: '#ff6b6b', fontWeight: 600 }}>Not enough 3D geometry data</p>
+        <p style={{ fontSize: '12px', marginTop: '8px', wordBreak: 'break-all' }}>
+          {description?.substring(0, 300)}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      width: '100%', maxWidth: '700px', height: '520px',
+      margin: '16px auto', borderRadius: '12px', overflow: 'hidden',
+      boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
     }}>
-      <canvas ref={canvasRef} width={width} height={height} style={{ display: 'block', cursor: 'grab', maxWidth: '100%', height: 'auto' }} />
-      <div style={{ padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #2a2a4a' }}>
-        <div style={{ color: '#888888', fontSize: '14px' }}>拖拽旋转 | 滚轮缩放</div>
-        <button onClick={() => setAutoRotate(!autoRotate)} style={{
-          padding: '6px 12px', borderRadius: '6px', border: 'none',
-          backgroundColor: autoRotate ? '#4a9eff' : '#3a3a5a',
-          color: '#ffffff', cursor: 'pointer', fontSize: '12px', transition: 'background-color 0.2s'
-        }}>
-          {autoRotate ? '暂停旋转' : '自动旋转'}
-        </button>
+      <Canvas camera={{ position: [5, 6, 8], fov: 55 }} style={{ background: '#1a1a2e' }}>
+        <ambientLight intensity={0.5} />
+        <directionalLight position={[8, 10, 4]} intensity={1.0} />
+        <directionalLight position={[-4, -2, -4]} intensity={0.4} />
+        <GridPlane />
+        <Axes />
+        <ThreeGeometry geoData={geoData} />
+        <OrbitControls enableDamping dampingFactor={0.1} minDistance={2} maxDistance={30} />
+      </Canvas>
+      <div style={{
+        padding: '10px 16px', backgroundColor: '#111122',
+        borderTop: '1px solid #2a2a4a', color: '#aaa', fontSize: '13px',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      }}>
+        <span>Drag to rotate | Scroll to zoom | Right-drag to pan</span>
       </div>
     </div>
   );

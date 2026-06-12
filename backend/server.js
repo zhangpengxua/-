@@ -100,14 +100,14 @@ function runChecks() {
     fix: '在终端中运行：pip install pillow（GIF 动画生成需要）',
   });
 
-  // 5. DeepSeek API Key
-  const apiKey = process.env.DEEPSEEK_API_KEY || '';
+  // 5. Claude API Key
+  const apiKey = process.env.LLM_API_KEY || '';
   const apiKeyOk = apiKey.length > 10 && apiKey.startsWith('sk-');
   checks.push({
-    name: 'DeepSeek API Key',
+    name: 'Claude API Key (AIHubMix)',
     ok: apiKeyOk,
-    detail: apiKeyOk ? '已配置' : '未配置或格式异常',
-    fix: '编辑 backend/.env 文件，设置 DEEPSEEK_API_KEY=你的DeepSeek_API_Key\n获取地址：https://platform.deepseek.com/api_keys',
+    detail: apiKeyOk ? 'Configured' : 'Not configured or invalid format',
+    fix: 'Set LLM_API_KEY=your-key in backend/.env\nGet your key: https://aihubmix.com/token',
   });
 
   // 6. Baidu OCR API Key

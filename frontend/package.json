@@ -10,10 +10,18 @@
     "eject": "react-scripts eject"
   },
   "dependencies": {
+    "@react-three/drei": "^9.122.0",
+    "@react-three/fiber": "^8.18.0",
     "axios": "^1.6.7",
+    "katex": "^0.17.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-scripts": "5.0.1"
+    "react-markdown": "^10.1.0",
+    "react-scripts": "5.0.1",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
+    "three": "^0.184.0"
   },
   "browserslist": {
     "production": [

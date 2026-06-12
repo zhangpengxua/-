@@ -1,10 +1,17 @@
 const axios = require('axios');
 require('dotenv').config();
 
-const DEEPSEEK_API_URL = process.env.DEEPSEEK_API_URL;
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+const AIHUBMIX_API_URL = process.env.AIHUBMIX_API_URL || 'https://aihubmix.com/v1/chat/completions';
+const AIHUBMIX_API_KEY = process.env.AIHUBMIX_API_KEY;
 
-// ==================== 提示词模板定义 ====================
+// DeepSeek uses its own key (from original project), Claude uses AIHubMix key
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || AIHUBMIX_API_KEY;
+const DEEPSEEK_API_URL = process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1/chat/completions';
+
+const LLM_CHAT_MODEL = process.env.LLM_CHAT_MODEL || 'deepseek-chat';
+const LLM_IMAGE_MODEL = process.env.LLM_IMAGE_MODEL || 'claude-sonnet-4-6';
+
+// ==================== Prompt template definitions ====================
 const PROMPT_TEMPLATES = {
   FIRST_LAYER: {
     NO_IMAGE: 'NO_IMAGE',
@@ -22,29 +29,55 @@ const PROMPT_TEMPLATES = {
 };
 
 class LLMService {
-  static async callDeepSeek(messages, systemPrompt = '', maxTokens = 4096) {
+  static logCall(type, model, promptLen) {
+    console.log(`[LLM:${type}] model=${model} promptLen=${promptLen}`);
+  }
+
+  static async callLLMChat(messages, systemPrompt = '', maxTokens = 4096) {
+    this.logCall('chat', LLM_CHAT_MODEL, (systemPrompt + JSON.stringify(messages)).length);
+    return this._callLLM(LLM_CHAT_MODEL, messages, systemPrompt, maxTokens);
+  }
+
+  static async callLLMImage(messages, systemPrompt = '', maxTokens = 4096) {
+    this.logCall('image', LLM_IMAGE_MODEL, (systemPrompt + JSON.stringify(messages)).length);
+    return this._callLLM(LLM_IMAGE_MODEL, messages, systemPrompt, maxTokens);
+  }
+
+  static async _callLLM(model, messages, systemPrompt = '', maxTokens = 4096) {
+    // DeepSeek chat model uses DeepSeek API directly; Claude image model uses AIHubMix
+    const isDeepSeek = model === 'deepseek-chat';
+    const url = isDeepSeek ? DEEPSEEK_API_URL : AIHUBMIX_API_URL;
+    const key = isDeepSeek ? DEEPSEEK_API_KEY : AIHUBMIX_API_KEY;
+
     try {
+      const msgs = [];
+      if (systemPrompt) {
+        msgs.push({ role: 'system', content: systemPrompt });
+      }
+      msgs.push(...messages);
+
       const requestBody = {
-        model: 'deepseek-chat',
-        messages: [
-          { role: 'system', content: systemPrompt || 'You are a helpful assistant.' },
-          ...messages
-        ],
+        model,
+        messages: msgs,
         max_tokens: maxTokens,
         temperature: 0.7
       };
 
-      const response = await axios.post(DEEPSEEK_API_URL, requestBody, {
+      const response = await axios.post(url, requestBody, {
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+          'Authorization': `Bearer ${key}`
         },
-        timeout: 180000
+        timeout: 180000,
+        maxRedirects: 5
       });
 
-      return response.data.choices[0].message.content;
+      const content = response.data.choices[0].message.content;
+      console.log(`[LLM:${model}] Response length:`, content?.length, 'First 200 chars:', content?.substring(0, 200));
+      return content;
     } catch (error) {
-      console.error('DeepSeek API Error:', error.response?.data || error.message);
+      const detail = error.response?.data;
+      console.error(`[LLM:${model}] API Error:`, JSON.stringify(detail || error.message));
       throw error;
     }
   }
@@ -137,7 +170,7 @@ class LLMService {
     const messages = [{ role: 'user', content: '判断以下输入是否是理科题目（需要分步解题）：\n' + userInput }];
 
     try {
-      const result = await this.callDeepSeek(messages, systemPrompt, 200);
+      const result = await this.callLLMChat(messages, systemPrompt, 200);
       const parsed = this.tryExtractJSON(result);
       if (parsed && typeof parsed.isProblem === 'boolean') {
         return parsed.isProblem;
@@ -160,7 +193,7 @@ class LLMService {
       { role: 'user', content: `${context ? '上下文：\n' + context + '\n\n' : ''}用户说：${userInput}` }
     ];
 
-    return await this.callDeepSeek(messages, systemPrompt, 300);
+    return await this.callLLMChat(messages, systemPrompt, 300);
   }
   static async firstLayerLLM(context, userInput) {
     const systemPrompt = [
@@ -176,11 +209,16 @@ class LLMService {
       '',
       '**Step N: 步骤名称**',
       '',
-      '详细描述解题过程，包括：',
-      '- 设定条件或变量定义',
-      '- 引用的定理、公式或公理',
-      '- 逐步计算过程（每行一个关键步骤）',
-      '- 推导过程和中间结果',
+      '详细描述解题过程，使用 Markdown 格式，包括：',
+      '- **粗体** 强调关键概念和定理',
+      '- *斜体* 标注注意事项',
+      '- `代码块` 标记变量和公式',
+      '- 有序列表和无序列表组织信息',
+      '- 表格整理数据',
+      '- > 引用块标注重要结论',
+      '- **数学公式使用 LaTeX 格式**：行内公式用 `$` 包裹（如 `$\\cos\\theta = \\frac{\\text{邻边}}{\\text{斜边}}$`），块级公式用 `$$` 包裹',
+      '- 向量用 `\\overrightarrow{AB}` 或 `\\vec{a}`，分数用 `\\frac{}{}`，根号用 `\\sqrt{}`',
+      '- **禁止使用 Unicode 下标** （如 ₁₂₃₄₅₆₇₈₉₀），始终用 LaTeX 或纯文本标记下标',
       '',
       '**示例格式：**',
       '',
@@ -199,23 +237,71 @@ class LLMService {
       'D是AB中点，故D(a/2, a/2, 0)',
       'E是AC₁中点，故E(a/2, 0, 1)',
       '',
+      '**顶点坐标列表：**',
+      '- A(2,0,0), B(0,2,0), C(0,0,0)',
+      '- A₁(2,0,2), B₁(0,2,2), C₁(0,0,2)',
+      '- D(1,1,0), E(1,0,1)',
+      '',
       '**Step 2: 证明DE ∥ 平面BCC₁B₁**',
       '',
       'DE的方向向量：',
       '',
-      'DE→ = E - D = (0, -a/2, 1)',
+      'DE→ = E - D = (0, -1, 1)',
       '',
-      '平面BCC₁B₁的法向量：',
+      '平面BCC₁B₁的法向量：n = (1,0,0)',
       '',
-      '平面x=0的法向量n = (1,0,0)',
-      '',
-      '验证：DE→ · n = 0·1 + (-a/2)·0 + 1·0 = 0',
-      '',
-      '因为DE与平面法向量垂直，所以DE ∥ 平面BCC₁B₁',
+      '> 关键推论：因为DE与平面法向量垂直，所以DE ∥ 平面BCC₁B₁',
       '',
       '**长度控制：** 每个步骤的 description 总共不超过300字。summary 不超过100字。',
       '**段落分隔：** 使用双换行 \\n\\n 分隔不同内容块，确保网页显示有合适间距。',
 
+      '## 底面顶点排布规则（重要）',
+      '',
+      '## 坐标系设定规则（必须遵守）',
+      '',
+      '使用标准右手直角坐标系：',
+      '- **底面在 XY 平面**（所有底面顶点的 z 坐标均为 0）',
+      '- **Z 轴为竖直轴**，向上为正方向',
+      '- **满足右手法则**：右手四指从 X 轴转向 Y 轴，拇指指向 Z 轴正方向',
+      '- X 轴指向右，Y 轴指向前（屏幕深处），Z 轴指向上',
+      '',
+      '**坐标放置要求（重要）：**',
+      '必须将所有几何体的顶点坐标全部放在第一卦限内（x≥0, y≥0, z≥0）。',
+      '选择合理的原点位置，使得图形的大部分位于坐标轴的正方向区域内。',
+      '例如：将几何体的一个顶点放在原点(0,0,0)处，其他顶点向x、y、z的正方向展开。',
+      '底面放在z=0的平面上，高沿z轴正方向延伸。',
+      '',
+      '底面顶点命名规则：',
+      '对于几何体（如棱柱、棱锥等），在描述顶点坐标时，底面顶点必须按照',
+      '**从上往下看逆时针（CCW）** 的方向排列。这是3D渲染系统正确判定面朝向的依据。',
+      '',
+      '具体规则：',
+      '1. 选取底面的任意一个顶点作为起点（如A）',
+      '2. 沿着底面多边形的边界，按逆时针方向依次命名后续顶点（B, C, D...）',
+      '3. 顶面的对应顶点应按相同顺序命名（A₁, B₁, C₁, D₁...）',
+      '4. 描述顶点坐标时，在顶点列表中按名称排序即可',
+      '',
+      '示例 - 正四棱柱底面（从上往下看，Z轴向下时XY面上的顶点）：',
+      '- A(1,1,0) — 右下',
+      '- B(-1,1,0) — 左上',
+      '- C(-1,-1,0) — 左下',
+      '- D(1,-1,0) — 右下',
+      '',
+      '## 骨架绘制规则（重要）',
+      '',
+      '对于需要生成3D图形的几何题，**必须在 description 末尾明确列出几何体的所有顶点和所有边（骨架）**。',
+      '即使某些顶点或边在解题步骤中没有被明确提及，也必须列出完整的几何体骨架。',
+      '',
+      '格式（分号分隔）：',
+      '- 先列出所有顶点的坐标：A(x,y,z); B(x,y,z); C(x,y,z); ...（按名称排序）',
+      '- 再列出所有边的连接：A-B; B-C; C-A; A-A1; B-B1; C-C1; ...（按几何结构列出）',
+      '',
+      '对于棱柱：底面环形连接 + 顶面环形连接 + 垂直棱',
+      '对于棱锥：底面环形连接 + 顶点到底面各顶点的连接',
+      '',
+      '示例 - 正三棱柱ABCDEF-A₁B₁C₁D₁E₁F₁：',
+      'A(0,0,0); B(2,0,0); C(3,√3,0); D(2,2√3,0); E(0,2√3,0); F(-1,√3,0); A₁(0,0,2); B₁(2,0,2); C₁(3,√3,2); D₁(2,2√3,2); E₁(0,2√3,2); F₁(-1,√3,2); A-B; B-C; C-D; D-E; E-F; F-A; A₁-B₁; B₁-C₁; C₁-D₁; D₁-E₁; E₁-F₁; F₁-A₁; A-A₁; B-B₁; C-C₁; D-D₁; E-E₁; F-F₁',
+      '',
       '## 图像决策',
       '以下情况 needImage=true：',
       '- 函数图像（一次/二次/指数/对数/三角/幂/绝对值/分段）→ MATH_STATIC_EQUATION',
@@ -237,14 +323,14 @@ class LLMService {
     const messages = [
       {
         role: 'user',
-        content: `${context ? '对话上下文：\n' + context + '\n\n' : ''}请解答以下问题。每个步骤必须包含目标、依据、详细计算过程和结果。只要涉及图形/函数/几何/物理/化学内容，务必标记为需要生成图像。\n\n问题：${userInput}`
+        content: `${context ? '对话上下文：\n' + context + '\n\n' : ''}请解答以下问题。使用Markdown格式输出，数学公式使用LaTeX（$cos\theta$ 行内公式 或 $$\\cos\\theta = \\frac{1}{2}$$ 块级公式）。对于几何类题目（imageType=MATH_STATIC_ABSTRACT），必须在description末尾用分号分隔格式明确列出所有顶点坐标和棱边连接。只要涉及图形/函数/几何/物理/化学内容，务必标记为需要生成图像。底面顶点请按从上往下看逆时针方向排布。\n\n问题：${userInput}`
       }
     ];
 
     const MAX_RETRIES = 2;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      const result = await this.callDeepSeek(messages, systemPrompt);
+      const result = await this.callLLMChat(messages, systemPrompt);
 
       const parsed = this.tryExtractJSON(result);
 
@@ -352,9 +438,9 @@ class LLMService {
     userPrompt.push('特别注意：识别题目中的辅助线和辅助面，并在auxiliaryLines和auxiliaryPlanes中标注。');
 
     const messages = [{ role: 'user', content: userPrompt.join('\n') }];
-    console.log('[extractGeometryParams] Calling DeepSeek...');
-    const result = await this.callDeepSeek(messages, systemPrompt);
-    console.log('[extractGeometryParams] Raw response:', result?.substring(0, 400));
+    console.log('[extractGeometryParams] Calling Claude for 3D code gen...');
+    const result = await this.callLLMImage(messages, systemPrompt);
+    console.log('[extractGeometryParams] Claude response:', result?.substring(0, 400));
 
     try {
       const jsonMatch = result.match(/\{[\s\S]*\}/);
@@ -446,8 +532,8 @@ class LLMService {
 
     const messages = [{ role: 'user', content: userPrompt.join('\n') }];
     console.log('[extractFunctionParams] Calling DeepSeek...');
-    const result = await this.callDeepSeek(messages, systemPrompt);
-    console.log('[extractFunctionParams] Raw response:', result?.substring(0, 400));
+    const result = await this.callLLMChat(messages, systemPrompt);
+    console.log('[extractFunctionParams] DeepSeek response:', result?.substring(0, 400));
 
     try {
       const jsonMatch = result.match(/\{[\s\S]*\}/);
@@ -473,6 +559,7 @@ class LLMService {
   // ==================== 代码生成 ====================
   static generateGeometryCode(params, imageType) {
     console.log('[generateGeometryCode] imageType:', imageType, 'points:', params.points?.length, 'lines:', params.lines?.length);
+    console.log('[generateGeometryCode] params:', JSON.stringify(params).substring(0, 400));
     const title = params.title || '几何图形';
     const points = params.points || [
       { name: 'A', x: 0, y: 0, z: 0 },
@@ -555,7 +642,16 @@ class LLMService {
       return `${pythonName} = (${p.x}, ${p.y}, ${p.z})`;
     }).join('\n');
 
-    let lineCode = '';
+    pointCode = pointCode.split('\n').map(p => p.trim()).filter(Boolean).join('; ');
+    lineCode = '';
+    const lineNames = lines.map(l => l.join('-'));
+
+    // Also emit human-readable data for the 3D viewer
+    const verticesDesc = points.map(p => `${p.name}(${p.x},${p.y},${p.z})`).join('; ');
+    const edgesDesc = lines.map(l => l.join('-')).join('; ');
+    console.log('[generateGeometryCode] vertices:', verticesDesc.substring(0, 200));
+    console.log('[generateGeometryCode] edges:', edgesDesc.substring(0, 200));
+
     lines.forEach((line, index) => {
       const key = line.join('-');
       let color, lw, linestyle;
@@ -627,7 +723,9 @@ class LLMService {
       `ax.scatter(${p.x}, ${p.y}, ${p.z}, c='${primaryColors[0]}', s=80, edgecolors='white', linewidths=2)\nax.text(${p.x}+0.15, ${p.y}+0.15, ${p.z}+0.15, '${p.name}', fontsize=14, fontweight='bold', color='${primaryColors[0]}')`
     ).join('\n');
 
-    return '```python\nimport matplotlib.pyplot as plt\nfrom mpl_toolkits.mplot3d import Axes3D\nimport numpy as np\n\nplt.rcParams[\'font.sans-serif\'] = [\'SimHei\', \'DejaVu Sans\']\nplt.rcParams[\'axes.unicode_minus\'] = False\n\nfig = plt.figure(figsize=(12, 8), facecolor=\'white\')\nax = fig.add_subplot(111, projection=\'3d\')\nax.set_facecolor(\'#fafafa\')\n\n' + pointCode + '\n\n' + lineCode + '\n' + planeCode + '\n' + scatterCode + '\n\nax.set_title(\'' + title + '\', fontsize=16, fontweight=\'bold\', pad=20, color=\'#1a237e\')\nax.set_xlabel(\'X\', fontsize=13, fontweight=\'bold\', color=\'#37474f\')\nax.set_ylabel(\'Y\', fontsize=13, fontweight=\'bold\', color=\'#37474f\')\nax.set_zlabel(\'Z\', fontsize=13, fontweight=\'bold\', color=\'#37474f\')\nax.grid(True, linestyle=\'--\', alpha=0.4, color=\'#90a4ae\')\nax.view_init(elev=' + viewAngle[0] + ', azim=' + viewAngle[1] + ')\n\nplt.tight_layout()\nplt.savefig(\'/tmp/figure.png\', dpi=150, bbox_inches=\'tight\', facecolor=\'white\')\nprint("Done")\n```';
+    // Emit the vertices and edges as a comment in the Python code for the 3D viewer
+    const geoComment = `# 3D_GEOMETRY_DATA|${verticesDesc}|${edgesDesc}\n`;
+    return geoComment + '```python\nimport matplotlib.pyplot as plt\nfrom mpl_toolkits.mplot3d import Axes3D\nimport numpy as np\n\nplt.rcParams[\'font.sans-serif\'] = [\'SimHei\', \'DejaVu Sans\']\nplt.rcParams[\'axes.unicode_minus\'] = False\n\nfig = plt.figure(figsize=(12, 8), facecolor=\'white\')\nax = fig.add_subplot(111, projection=\'3d\')\nax.set_facecolor(\'#fafafa\')\n\n' + pointCode + '\n\n# 基础线条\n' + lineCode + '\n# 辅助面\n' + planeCode + '\n# 散点 + 标注\n' + scatterCode + '\n\nax.set_title(\'' + title + '\', fontsize=16, fontweight=\'bold\', pad=20, color=\'#1a237e\')\nax.set_xlabel(\'X\', fontsize=13, fontweight=\'bold\', color=\'#37474f\')\nax.set_ylabel(\'Y\', fontsize=13, fontweight=\'bold\', color=\'#37474f\')\nax.set_zlabel(\'Z\', fontsize=13, fontweight=\'bold\', color=\'#37474f\')\nax.grid(True, linestyle=\'--\', alpha=0.4, color=\'#90a4ae\')\nax.view_init(elev=' + viewAngle[0] + ', azim=' + viewAngle[1] + ')\n\nplt.tight_layout()\nplt.savefig(\'/tmp/figure.png\', dpi=150, bbox_inches=\'tight\', facecolor=\'white\')\nprint("Done")\n```';
   }
 
   static generateFunctionCode(params, imageType) {
@@ -1183,7 +1281,7 @@ ani = animation.FuncAnimation(fig, update, frames=40, interval=100, blit=True)
 
     const messages = [{ role: 'user', content: userPrompt.join('\n') }];
     console.log('[extractAnimationParams] Calling DeepSeek...');
-    const result = await this.callDeepSeek(messages, systemPrompt);
+    const result = await this.callLLMChat(messages, systemPrompt);
     console.log('[extractAnimationParams] Raw response:', result?.substring(0, 500));
 
     try {
@@ -1223,7 +1321,7 @@ ani = animation.FuncAnimation(fig, update, frames=40, interval=100, blit=True)
     const responseMessages = [
       { role: 'user', content: '请为以下对话生成一个简洁的标题（不超过20个字）：\n\n' + messagesText }
     ];
-    const result = await this.callDeepSeek(responseMessages, systemPrompt);
+    const result = await this.callLLMChat(responseMessages, systemPrompt);
     return result.trim().replace(/["""'']/g, '');
   }
 
