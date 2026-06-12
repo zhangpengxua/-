@@ -251,6 +251,7 @@ function App() {
       );
     } catch (error) {
       console.error('Failed to send message:', error);
+      console.error('Error response:', error.response?.data);
     } finally {
       setLoadingConvId(null);
     }

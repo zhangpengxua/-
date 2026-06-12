@@ -626,7 +626,7 @@ class LLMService {
 
     // 创建点名称映射：将下标等特殊字符转换为Python兼容的变量名
     const pointNameMap = {};
-    const pointCode = points.map(p => {
+    let pointCode = points.map(p => {
       const pythonName = p.name
         .replace(/₀/g, '0')
         .replace(/₁/g, '1')
@@ -643,7 +643,7 @@ class LLMService {
     }).join('\n');
 
     pointCode = pointCode.split('\n').map(p => p.trim()).filter(Boolean).join('; ');
-    lineCode = '';
+    let lineCode = '';
     const lineNames = lines.map(l => l.join('-'));
 
     // Also emit human-readable data for the 3D viewer
