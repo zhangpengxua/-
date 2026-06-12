@@ -91,6 +91,7 @@ router.post('/:id/message', async (req, res) => {
     conversation.messages.push({
       role: 'user', content, imageUrl: imageBase64 ? `data:image/png;base64,${imageBase64}` : null, ocrText: null, timestamp: new Date()
     });
+    console.log('[POST msg] user content:', content?.substring(0, 200));
 
     activeRequests[convId] = { abort: false };
 
