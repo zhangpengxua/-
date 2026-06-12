@@ -167,14 +167,19 @@ function App() {
   const deleteConversation = async (id) => {
     try {
       await axios.delete(`${API_BASE_URL}/conversations/${id}`);
-      setConversations(prev => prev.filter(c => c._id !== id));
-      if (currentConversation?._id === id) {
-        setConversations(prev => {
-          const remaining = prev.filter(c => c._id !== id);
-          setCurrentConversation(remaining.length > 0 ? remaining[0] : null);
-          return remaining;
-        });
-      }
+      setConversations(prev => {
+        const oldIndex = prev.findIndex(c => c._id === id);
+        const remaining = prev.filter(c => c._id !== id);
+        if (currentConversation?._id === id) {
+          // Pick next: the conversation that was just below the deleted one, or the last one, or null
+          const next = remaining.length > 0
+            ? (oldIndex < remaining.length ? remaining[oldIndex] : remaining[remaining.length - 1])
+            : null;
+          setCurrentConversation(next);
+          if (next) selectConversation(next._id);
+        }
+        return remaining;
+      });
     } catch (error) {
       console.error('Failed to delete conversation:', error);
     }
