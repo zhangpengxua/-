@@ -136,22 +136,46 @@ const ChatArea = ({ messages = [], isLoading, formatDate, onEditLastMessage }) =
   };
 
   const renderContent = (text) => {
-    // Preprocess: wrap bare LaTeX commands in $...$ so KaTeX can render them
-    const processed = text
-      // \vec{AB} → $\vec{AB}$
-      .replace(/\\vec\{[^}]+\}/g, (m) => `$${m}$`)
-      // \overrightarrow{AB} → $\overrightarrow{AB}$
-      .replace(/\\overrightarrow\{[^}]+\}/g, (m) => `$${m}$`)
-      // \frac{a}{b} → $\frac{a}{b}$
-      .replace(/\\frac\{[^}]+\}\{[^}]+\}/g, (m) => `$${m}$`)
-      // \sqrt{x} → $\sqrt{x}$
-      .replace(/\\sqrt\{[^}]+\}/g, (m) => `$${m}$`)
-      // √x → $\sqrt{x}$
-      .replace(/√(\d+|[a-zA-Z])/g, (_, n) => `$\\sqrt{${n}}$`)
-      // \displaystyle stuff
-      .replace(/\\displaystyle\s+/g, '')
-      // AC→ → $\overrightarrow{AC}$ (arrow notation)
-      .replace(/([A-Z][\d]*)→/g, '$\\overrightarrow{$1}$');
+    // Fix: convert literal \n (two-char backslash-n) in text to actual newlines
+    let processed = text.replace(/\\n/g, '\n');
+
+    // Step 1: protect existing display math $$...$$ (temporarily)
+    const displayMathBlocks = [];
+    processed = processed.replace(/\$\$(.+?)\$\$/gs, (match, inner) => {
+      const idx = displayMathBlocks.length;
+      displayMathBlocks.push({ type: 'display', content: inner });
+      return `\x00DMATH${idx}\x00`;
+    });
+
+    // Step 2: protect existing inline math $...$
+    const inlineMathBlocks = [];
+    processed = processed.replace(/\$(.+?)\$/g, (match, inner) => {
+      const idx = inlineMathBlocks.length;
+      inlineMathBlocks.push({ type: 'inline', content: inner });
+      return `\x00IMATH${idx}\x00`;
+    });
+
+    // Step 3: if the AI still emitted bare LaTeX outside protected blocks,
+    // wrap isolated \cmd{...} and _^ subscript/superscript in inline math
+    // This is a fallback for when the AI doesn't follow the $...$ convention
+    processed = processed.replace(
+      /\\[a-zA-Z]+(?:\{[^}]*\})+(?:[_^]\{[^}]*\}|[_^]\\[a-zA-Z]+\{[^}]*\}|[_^]\d+)*/g,
+      (m) => `$${m}$`
+    );
+    processed = processed.replace(
+      /([a-zA-Z]\d*)\.?\s*[_^]\s*(\{[^}]*\}|\\\w+\{[^}]*\}|\d+)([_^](\{[^}]*\}|\\\w+\{[^}]*\}|\d+))*/g,
+      (m) => `$${m}$`
+    );
+
+    // Step 4: restore protected math blocks
+    processed = processed.replace(/\x00DMATH(\d+)\x00/g, (match, idx) => {
+      const block = displayMathBlocks[parseInt(idx)];
+      return block ? `$$${block.content}$$` : '';
+    });
+    processed = processed.replace(/\x00IMATH(\d+)\x00/g, (match, idx) => {
+      const block = inlineMathBlocks[parseInt(idx)];
+      return block ? `$${block.content}$` : '';
+    });
 
     return (
       <ReactMarkdown

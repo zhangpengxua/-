@@ -77,7 +77,7 @@ function SetupGuide({ checks, onDismiss, theme }) {
                 display: 'block', backgroundColor: '#1e1e1e', color: '#d4d4d4',
                 padding: '8px 12px', borderRadius: '4px', marginTop: '4px', fontSize: '13px',
               }}>
-                pip install matplotlib numpy pillow
+                pip install matplotlib numpy pillow sympy
               </code>
             </div>
           )}

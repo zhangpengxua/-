@@ -181,7 +181,8 @@ function ThreeGeometry({ geoData }) {
     geoData.lines.map(([a, b]) => {
       const pa = pointMap[a], pb = pointMap[b];
       if (!pa || !pb) return null;
-      return { key: `${a}-${b}`, start: pa, end: pb };
+      // Convert from math (x,y,z) to Three.js (x,z,y)
+      return { key: `${a}-${b}`, start: [pa[0], pa[2], pa[1]], end: [pb[0], pb[2], pb[1]] };
     }).filter(Boolean),
   [geoData.lines, pointMap]);
 
@@ -196,11 +197,12 @@ function ThreeGeometry({ geoData }) {
       ))}
       {geoData.points.map((pt, idx) => (
         <group key={pt.name}>
-          <mesh position={[pt.x, pt.z, -pt.y]}>
+          {/* Math: X=right, Y=forward, Z=up → Three.js: X=right, Y=up, Z=back */}
+          <mesh position={[pt.x, pt.z, pt.y]}>
             <sphereGeometry args={[0.12, 16, 16]} />
             <meshStandardMaterial color={sphereColors[idx % sphereColors.length]} />
           </mesh>
-          <Text position={[pt.x + 0.2, pt.z + 0.2, -pt.y + 0.2]} fontSize={0.28} color="#ffffff" fontWeight="bold">
+          <Text position={[pt.x + 0.2, pt.z + 0.2, pt.y + 0.2]} fontSize={0.28} color="#ffffff" fontWeight="bold">
             {pt.name}
           </Text>
         </group>
@@ -212,15 +214,15 @@ function ThreeGeometry({ geoData }) {
 function Axes() {
   return (
     <group>
-      {/* X: right → (+1, 0, 0) */}
+      {/* X: right → (+1, 0, 0) — same in both math and Three.js */}
       <Line points={[[0,0,0],[5,0,0]]} color="#ff4444" lineWidth={2} />
       <Text position={[5.3, 0, 0]} fontSize={0.4} color="#ff4444" fontWeight="bold">X</Text>
-      {/* Y: away/up → (0, 1, 0) */}
-      <Line points={[[0,0,0],[0,5,0]]} color="#44ff44" lineWidth={2} />
-      <Text position={[0, 5.3, 0]} fontSize={0.4} color="#44ff44" fontWeight="bold">Y</Text>
-      {/* Z: up → (0, 0, 5) */}
-      <Line points={[[0,0,0],[0,0,5]]} color="#4488ff" lineWidth={2} />
-      <Text position={[0, 0, 5.3]} fontSize={0.4} color="#4488ff" fontWeight="bold">Z</Text>
+      {/* Y: math-forward → Three.js +Z (into screen). Draw as (0, 0, +5) */}
+      <Line points={[[0,0,0],[0,0,5]]} color="#44ff44" lineWidth={2} />
+      <Text position={[0, 0, 5.3]} fontSize={0.4} color="#44ff44" fontWeight="bold">Y</Text>
+      {/* Z: UP → Three.js +Y. Math-Z (up) = Three-Y (up) */}
+      <Line points={[[0,0,0],[0,5,0]]} color="#4488ff" lineWidth={2} />
+      <Text position={[0, 5.3, 0]} fontSize={0.4} color="#4488ff" fontWeight="bold">Z</Text>
     </group>
   );
 }
