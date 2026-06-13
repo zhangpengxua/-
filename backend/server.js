@@ -94,23 +94,40 @@ function runChecks() {
     }
   } catch (e) { /* not installed */ }
   checks.push({
-    name: 'pillow',
+    name: 'pillow (GIF 动画)',
     ok: pillowOk,
     detail: pillowOk ? '已安装' : '未安装',
-    fix: '在终端中运行：pip install pillow（GIF 动画生成需要）',
+    fix: '在终端中运行：pip install pillow',
   });
 
-  // 5. Claude API Key
-  const apiKey = process.env.LLM_API_KEY || '';
-  const apiKeyOk = apiKey.length > 10 && apiKey.startsWith('sk-');
+  // 5. sympy (符号计算)
+  let sympyOk = false;
+  try {
+    const out = execSync('python -c "import sympy; print(sympy.__version__)" 2>&1', { encoding: 'utf8' }).trim();
+    if (out && !out.includes('Traceback')) {
+      sympyOk = true;
+    }
+  } catch (e) { /* not installed */ }
   checks.push({
-    name: 'Claude API Key (AIHubMix)',
+    name: 'sympy (符号/LaTeX)',
+    ok: sympyOk,
+    detail: sympyOk ? '已安装' : '未安装',
+    fix: '在终端中运行：pip install sympy（数学符号计算与 LaTeX 输出，可选）',
+  });
+
+  // 6. AI API Key (AIHubMix / DeepSeek)
+  const aiHubMixKey = process.env.AIHUBMIX_API_KEY || '';
+  const deepseekKey = process.env.DEEPSEEK_API_KEY || '';
+  const apiKeyOk = (aiHubMixKey.length > 10 && aiHubMixKey.startsWith('sk-'))
+    || (deepseekKey.length > 10 && deepseekKey.startsWith('sk-'));
+  checks.push({
+    name: 'AI API Key (AIHubMix/DeepSeek)',
     ok: apiKeyOk,
     detail: apiKeyOk ? 'Configured' : 'Not configured or invalid format',
-    fix: 'Set LLM_API_KEY=your-key in backend/.env\nGet your key: https://aihubmix.com/token',
+    fix: 'Set AIHUBMIX_API_KEY=your-key in backend/.env\nGet your key: https://aihubmix.com/token',
   });
 
-  // 6. Baidu OCR API Key
+  // 7. Baidu OCR API Key
   const ocrKey = process.env.BAIDU_OCR_API_KEY || '';
   const ocrSecret = process.env.BAIDU_OCR_SECRET_KEY || '';
   const ocrOk = ocrKey.length > 5 && ocrSecret.length > 5;

@@ -90,24 +90,74 @@ class LLMService {
   ];
 
   static tryExtractJSON(text) {
-    let cleaned = text.trim();
-    cleaned = cleaned.replace(/```(?:json)?\s*/gi, '').replace(/```\s*/g, '');
+    let raw = text.trim();
+    // Strip markdown code fences
+    raw = raw.replace(/^```(?:json)?\s*\n?/gi, '').replace(/\n?```\s*$/gi, '');
 
-    let jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
+    // Extract outermost JSON object via bracket-depth walk (handles nested {} reliably)
+    const firstBrace = raw.indexOf('{');
+    if (firstBrace === -1) return null;
+    let depth = 0, inStr = false, esc = false;
+    for (let i = firstBrace; i < raw.length; i++) {
+      const ch = raw[i];
+      if (esc) { esc = false; continue; }
+      if (ch === '\\') { esc = true; continue; }
+      if (ch === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (ch === '{') depth++;
+      else if (ch === '}') { depth--; if (depth === 0) { raw = raw.slice(firstBrace, i + 1); break; } }
+    }
 
-    let jsonStr = jsonMatch[0];
-    jsonStr = jsonStr
-      .replace(/,(\s*[}\]])/g, '$1')
-      .replace(/([{,]\s*)(\w+)(\s*:)/g, '$1"$2"$3')
-      .replace(/:(\s*)(\w+)(\s*[,}\]])/g, ':"$2"$3');
+    // === Repair common LLM JSON issues ===
+    let s = raw;
+
+    // 1. Trailing comma before ] or }
+    s = s.replace(/,(\s*[}\]])/g, '$1');
+
+    // 2. Quote unquoted keys: {key: → {"key":
+    s = s.replace(/([{,]\s*)([a-zA-Z_]\w*)(\s*:)/g, '$1"$2"$3');
+
+    // 3. Quote unquoted string values (simple word-values the LLM forgot to quote).
+    //    Only targets values that contain non-JSON-safe content: spaces, LaTeX, Chinese.
+    s = s.replace(
+      /:\s*([a-zA-Z_][^,\[\]{}"]*?)(\s*[,}\]])/g,
+      (m, v, d) => {
+        const trimmed = v.trimEnd();
+        if (trimmed === 'true' || trimmed === 'false' || trimmed === 'null'
+            || /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(trimmed)) return m;
+        // If it's a single unquoted word like MATH_STATIC_EQUATION, quote it
+        if (/^[A-Z_]+$/.test(trimmed)) return ':"' + trimmed + '"' + d;
+        return m;
+      }
+    );
+
+    // 4. Fix bare LaTeX backslash+letter → double backslash so JSON.parse preserves them.
+    //    JSON.parse turns \t into TAB, \f into FF, \b into BS, \r into CR,
+    //    and throws on \s \d \c. BUT we must NOT touch \n (valid JSON newline escape).
+    //    First protect \n, then escape all other \<letter>, then restore \n.
+    const NEWLINE_PLACEHOLDER = '\x00NLINE\x00';
+    s = s.replace(/\\n/g, NEWLINE_PLACEHOLDER);
+    s = s.replace(/(?<!\\)\\([a-zA-Z])/g, '\\\\$1');
+    s = s.replace(new RegExp(NEWLINE_PLACEHOLDER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '\\n');
 
     try {
-      return JSON.parse(jsonStr);
+      return JSON.parse(s);
     } catch (e1) {
+      console.error('[tryExtractJSON] Pass 1 failed:', e1.message.substring(0, 200));
+      console.error('[tryExtractJSON] JSON start:', s.substring(0, 500));
+
+      // Fallback: minimal repairs only — trailing commas + backslash fix
       try {
-        return JSON.parse(jsonMatch[0]);
+        const NL = '\x00NL\x00';
+        let fb = raw
+          .replace(/,(\s*[}\]])/g, '$1')
+          .replace(/([{,]\s*)([a-zA-Z_]\w*)(\s*:)/g, '$1"$2"$3')
+          .replace(/\\n/g, NL)
+          .replace(/(?<!\\)\\([a-zA-Z])/g, '\\\\$1')
+          .replace(new RegExp(NL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '\\n');
+        return JSON.parse(fb);
       } catch (e2) {
+        console.error('[tryExtractJSON] Pass 2 also failed:', e2.message.substring(0, 200));
         return null;
       }
     }
@@ -203,6 +253,13 @@ class LLMService {
       '1. 禁止编造数据。题目未给的条件不得杜撰，假设需标注"假设…"',
       '2. 每步标注依据（定理/公式/条件）',
       '3. 不确定时列出多种可能并说明适用条件',
+      '',
+      '## 杜绝自我质疑与犹豫（极重要）',
+      '1. 输出是成品答案，不允许在内容中出现"？"、"注意："、"实际上……"、"等等……"、"可能是……吧"等犹豫/自我否定/推敲的语句',
+      '2. 不允许出现自问自答（如"BC∥AD，所以C的y与B相同（y=0）？注意：…"）。一旦写出结论就不能推翻或质疑',
+      '3. 每句话必须是确定性陈述。如果真有不确定性，只给确定的结论，不确定的细节省略不写',
+      '4. 动词用"设"、"解得"、"得"、"因为"、"所以"、"故"，不要用"可能是"、"大概"、"似乎"、"也许"',
+      '5. 不要在描述中暴露解题过程中的思维纠结——直接给出最终判断结果',
 
       '## 步骤格式 - 仿照以下范例输出',
       '每步 description 需要详细且结构化，参考格式：',
@@ -216,8 +273,8 @@ class LLMService {
       '- 有序列表和无序列表组织信息',
       '- 表格整理数据',
       '- > 引用块标注重要结论',
-      '- **数学公式使用 LaTeX 格式**：行内公式用 `$` 包裹（如 `$\\cos\\theta = \\frac{\\text{邻边}}{\\text{斜边}}$`），块级公式用 `$$` 包裹',
-      '- 向量用 `\\overrightarrow{AB}` 或 `\\vec{a}`，分数用 `\\frac{}{}`，根号用 `\\sqrt{}`',
+      '- **数学公式必须用 $...$ 包裹成完整表达式**。每个独立的数学公式用一个 `$...$` 包裹，不要对公式内部的单个命令单独用 `$`，正确示例：`$\\cos\\theta = \\frac{|\\overrightarrow{AC} \\cdot \\overrightarrow{PO}|}{|\\overrightarrow{AC}| \\cdot |\\overrightarrow{PO}|}$`，`$x_0^2 + y_0^2 + (z_0 - \\sqrt{2})^2 = (x_0 - \\sqrt{2})^2 + y_0^2 + z_0^2$`',
+      '- **错误示例（禁止）**：`$\\cos\\theta = \\frac{|$\\overrightarrow{AC}$  \\cdot $\\overrightarrow{PO}$|}{|$\\overrightarrow{AC}$| \\cdot |$\\overrightarrow{PO}$|}$`（公式内部多余的 $ 会破坏渲染）。不要这样写！',
       '- **禁止使用 Unicode 下标** （如 ₁₂₃₄₅₆₇₈₉₀），始终用 LaTeX 或纯文本标记下标',
       '',
       '**示例格式：**',
@@ -259,17 +316,15 @@ class LLMService {
       '',
       '## 坐标系设定规则（必须遵守）',
       '',
-      '使用标准右手直角坐标系：',
-      '- **底面在 XY 平面**（所有底面顶点的 z 坐标均为 0）',
-      '- **Z 轴为竖直轴**，向上为正方向',
-      '- **满足右手法则**：右手四指从 X 轴转向 Y 轴，拇指指向 Z 轴正方向',
-      '- X 轴指向右，Y 轴指向前（屏幕深处），Z 轴指向上',
+      '使用标准右手直角坐标系（Z轴向上）：',
+      '- **底面放在 XY 平面上**（所有底面顶点的 z 坐标均为 0）',
+      '- **Z 轴为竖直轴**，向上为正方向，代表高度',
+      '- **右手法则**：右手四指从 X 轴弯向 Y 轴，拇指指向 Z 轴正方向',
       '',
-      '**坐标放置要求（重要）：**',
-      '必须将所有几何体的顶点坐标全部放在第一卦限内（x≥0, y≥0, z≥0）。',
-      '选择合理的原点位置，使得图形的大部分位于坐标轴的正方向区域内。',
-      '例如：将几何体的一个顶点放在原点(0,0,0)处，其他顶点向x、y、z的正方向展开。',
-      '底面放在z=0的平面上，高沿z轴正方向延伸。',
+      '坐标放置：',
+      '- 原点可放在几何体的某个顶点上',
+      '- 底面在 XY 平面（z = 0），高/竖直方向沿 Z 轴正方向',
+      '- 坐标按实际题目含义自由设定，无需限制在第一卦限',
       '',
       '底面顶点命名规则：',
       '对于几何体（如棱柱、棱锥等），在描述顶点坐标时，底面顶点必须按照',
@@ -289,18 +344,39 @@ class LLMService {
       '',
       '## 骨架绘制规则（重要）',
       '',
-      '对于需要生成3D图形的几何题，**必须在 description 末尾明确列出几何体的所有顶点和所有边（骨架）**。',
-      '即使某些顶点或边在解题步骤中没有被明确提及，也必须列出完整的几何体骨架。',
+      '对于需要生成3D图形的几何题（imageType=MATH_STATIC_ABSTRACT），',
+      '**必须在 description 末尾列出几何体的所有顶点坐标和所有边的连接**。',
       '',
-      '格式（分号分隔）：',
-      '- 先列出所有顶点的坐标：A(x,y,z); B(x,y,z); C(x,y,z); ...（按名称排序）',
-      '- 再列出所有边的连接：A-B; B-C; C-A; A-A1; B-B1; C-C1; ...（按几何结构列出）',
+      '输出格式（分号 `;` 分隔，一行一条）：',
+      '- 先列出所有顶点坐标：`A(x,y,z); B(x,y,z); C(x,y,z); D(x,y,z); ...`',
+      '- 再列出所有棱边：`A-B; B-C; C-D; D-A; ...`',
       '',
-      '对于棱柱：底面环形连接 + 顶面环形连接 + 垂直棱',
-      '对于棱锥：底面环形连接 + 顶点到底面各顶点的连接',
+      '多面体骨架规则（通用）：',
+      '- **底面**：按逆时针环形连接所有底面顶点（如 A-B; B-C; C-D; D-A）',
+      '- **顶面**（棱柱/棱台）：同样逆时针环形连接所有顶面顶点',
+      '- **侧棱**：连接底面顶点与对应的顶面顶点（如 A-A1; B-B1; C-C1）',
+      '- **棱锥**：底面环形连接 + 顶点到底面每个顶点的连接',
       '',
-      '示例 - 正三棱柱ABCDEF-A₁B₁C₁D₁E₁F₁：',
-      'A(0,0,0); B(2,0,0); C(3,√3,0); D(2,2√3,0); E(0,2√3,0); F(-1,√3,0); A₁(0,0,2); B₁(2,0,2); C₁(3,√3,2); D₁(2,2√3,2); E₁(0,2√3,2); F₁(-1,√3,2); A-B; B-C; C-D; D-E; E-F; F-A; A₁-B₁; B₁-C₁; C₁-D₁; D₁-E₁; E₁-F₁; F₁-A₁; A-A₁; B-B₁; C-C₁; D-D₁; E-E₁; F-F₁',
+      '旋转体（圆柱、圆锥、圆台）：',
+      '- 圆柱/圆台：列出上下底面圆心（如 O₁、O₂）和半径 r₁、r₂，再列出 8-12 个底面圆周上的点+对应顶面点',
+      '- 圆锥：列出底面圆心 O、半径 r，以及 8-12 个底面圆周上的点 + 顶点 V，连接 V 到底面每个点',
+      '- 对圆柱/圆台顶面、底面上的相邻周点之间都要连接',
+      '',
+      '**严格绑定规则（必须遵守）：**',
+      '- 每条边连接的两个顶点名必须已经在顶点列表中定义过',
+      '- 顶点名和边名不需要按字母序排列，但必须在列表中',
+      '- 禁止在边列表中使用未定义的顶点名',
+      '- 先写出完整的顶点列表，再写边列表',
+      '- 点坐标用数值表示，不使用表达式或含 √ 的形式',
+      '',
+      '示例 - 三棱柱 A-B-C 底面 + A₁-B₁-C₁ 顶面：',
+      'A(0,0,0); B(2,0,0); C(1,√3,0); A₁(0,0,2.5); B₁(2,0,2.5); C₁(1,√3,2.5); A-B; B-C; C-A; A₁-B₁; B₁-C₁; C₁-A₁; A-A₁; B-B₁; C-C₁',
+      '',
+      '示例 - 四棱锥 S-ABCD：',
+      'A(1,1,0); B(3,1,0); C(4,3,0); D(0.5,3,0); S(2,2,4); A-B; B-C; C-D; D-A; S-A; S-B; S-C; S-D',
+      '',
+      '示例 - 圆柱（半径1，高3）：',
+      'O₁(0,0,0); A(1,0,0); B(0.71,0.71,0); C(0,1,0); D(-0.71,0.71,0); E(-1,0,0); F(-0.71,-0.71,0); G(0,-1,0); H(0.71,-0.71,0); O₂(0,0,3); A₁(1,0,3); B₁(0.71,0.71,3); C₁(0,1,3); D₁(-0.71,0.71,3); E₁(-1,0,3); F₁(-0.71,-0.71,3); G₁(0,-1,3); H₁(0.71,-0.71,3); A-B; B-C; C-D; D-E; E-F; F-G; G-H; H-A; A₁-B₁; B₁-C₁; C₁-D₁; D₁-E₁; E₁-F₁; F₁-G₁; G₁-H₁; H₁-A₁; A-A₁; B-B₁; C-C₁; D-D₁; E-E₁; F-F₁; G-G₁; H-H₁',
       '',
       '## 图像决策',
       '以下情况 needImage=true：',
@@ -445,7 +521,10 @@ class LLMService {
     try {
       const jsonMatch = result.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        const params = JSON.parse(jsonMatch[0]);
+        const params = JSON.parse(jsonMatch[0]
+          .replace(/\\n/g, '\x00NL\x00')
+          .replace(/(?<!\\)\\([a-zA-Z])/g, '\\\\$1')
+          .replace(/\x00NL\x00/g, '\\n'));
         return this.generateGeometryCode(params, imageType);
       }
       throw new Error('No JSON found in geometry params response');
@@ -538,7 +617,10 @@ class LLMService {
     try {
       const jsonMatch = result.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        const params = JSON.parse(jsonMatch[0]);
+        const params = JSON.parse(jsonMatch[0]
+          .replace(/\\n/g, '\x00NL\x00')
+          .replace(/(?<!\\)\\([a-zA-Z])/g, '\\\\$1')
+          .replace(/\x00NL\x00/g, '\\n'));
         return this.generateFunctionCode(params, imageType);
       }
       throw new Error('No JSON found in function params response');
@@ -1287,7 +1369,10 @@ ani = animation.FuncAnimation(fig, update, frames=40, interval=100, blit=True)
     try {
       const jsonMatch = result.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        const params = JSON.parse(jsonMatch[0]);
+        const params = JSON.parse(jsonMatch[0]
+          .replace(/\\n/g, '\x00NL\x00')
+          .replace(/(?<!\\)\\([a-zA-Z])/g, '\\\\$1')
+          .replace(/\x00NL\x00/g, '\\n'));
         return this.generateGeometryAnimationCode(params);
       }
       throw new Error('No JSON found in animation params response');
