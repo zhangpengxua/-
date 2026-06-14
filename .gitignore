@@ -1,0 +1,36 @@
+# ===== 依赖 =====
+node_modules/
+
+# ===== 构建产物 =====
+frontend/build/
+dist/
+
+# ===== 缓存 =====
+.cache/
+*.pyc
+__pycache__/
+
+# ===== 临时文件 =====
+backend/tmp/
+backend/temp_figure.py
+*.tmp
+
+# ===== 环境变量 =====
+.env
+.env.local
+.env.*.local
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===== 操作系统 =====
+.DS_Store
+Thumbs.db
+
+# ===== 日志 =====
+*.log
+npm-debug.log*
