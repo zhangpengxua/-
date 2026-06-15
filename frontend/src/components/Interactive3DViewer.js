@@ -181,8 +181,9 @@ function ThreeGeometry({ geoData }) {
     geoData.lines.map(([a, b]) => {
       const pa = pointMap[a], pb = pointMap[b];
       if (!pa || !pb) return null;
-      // Convert from math (x,y,z) to Three.js (x,z,y)
-      return { key: `${a}-${b}`, start: [pa[0], pa[2], pa[1]], end: [pb[0], pb[2], pb[1]] };
+      // Math (X=right, Y=forward, Z=up) → Three.js (X=right, Y=up, Z=back)
+      // Right-hand rule: math +Y → Three.js -Z
+      return { key: `${a}-${b}`, start: [pa[0], pa[2], -pa[1]], end: [pb[0], pb[2], -pb[1]] };
     }).filter(Boolean),
   [geoData.lines, pointMap]);
 
@@ -197,12 +198,13 @@ function ThreeGeometry({ geoData }) {
       ))}
       {geoData.points.map((pt, idx) => (
         <group key={pt.name}>
-          {/* Math: X=right, Y=forward, Z=up → Three.js: X=right, Y=up, Z=back */}
-          <mesh position={[pt.x, pt.z, pt.y]}>
+          {/* Math (X=right, Y=forward, Z=up) → Three.js (X=right, Y=up, Z=back)
+              Right-hand rule: math +Y → Three.js -Z */}
+          <mesh position={[pt.x, pt.z, -pt.y]}>
             <sphereGeometry args={[0.12, 16, 16]} />
             <meshStandardMaterial color={sphereColors[idx % sphereColors.length]} />
           </mesh>
-          <Text position={[pt.x + 0.2, pt.z + 0.2, pt.y + 0.2]} fontSize={0.28} color="#ffffff" fontWeight="bold">
+          <Text position={[pt.x + 0.2, pt.z + 0.2, -pt.y + 0.2]} fontSize={0.28} color="#ffffff" fontWeight="bold">
             {pt.name}
           </Text>
         </group>
@@ -212,15 +214,19 @@ function ThreeGeometry({ geoData }) {
 }
 
 function Axes() {
+  // Right-hand rule: (+X) × (+Y) = +Z
+  // Math → Three.js: X→X, Y→-Z, Z→Y
+  // In Three.js: (+1,0,0) × (0,0,-1) = (0,1,0) = +Y = math +Z  ✓ right-handed
+  const LABEL_OFFSET = 0.8;
   return (
     <group>
-      {/* X: right → (+1, 0, 0) — same in both math and Three.js */}
+      {/* X: right → (+1, 0, 0) */}
       <Line points={[[0,0,0],[5,0,0]]} color="#ff4444" lineWidth={2} />
-      <Text position={[5.3, 0, 0]} fontSize={0.4} color="#ff4444" fontWeight="bold">X</Text>
-      {/* Y: math-forward → Three.js +Z (into screen). Draw as (0, 0, +5) */}
-      <Line points={[[0,0,0],[0,0,5]]} color="#44ff44" lineWidth={2} />
-      <Text position={[0, 0, 5.3]} fontSize={0.4} color="#44ff44" fontWeight="bold">Y</Text>
-      {/* Z: UP → Three.js +Y. Math-Z (up) = Three-Y (up) */}
+      <Text position={[5.3, LABEL_OFFSET, 0]} fontSize={0.4} color="#ff4444" fontWeight="bold">X</Text>
+      {/* Y: forward → (0, 0, -5) in Three.js = math +Y */}
+      <Line points={[[0,0,0],[0,0,-5]]} color="#44ff44" lineWidth={2} />
+      <Text position={[0, LABEL_OFFSET, -5.3]} fontSize={0.4} color="#44ff44" fontWeight="bold">Y</Text>
+      {/* Z: UP → (0, +5, 0) in Three.js = math +Z */}
       <Line points={[[0,0,0],[0,5,0]]} color="#4488ff" lineWidth={2} />
       <Text position={[0, 5.3, 0]} fontSize={0.4} color="#4488ff" fontWeight="bold">Z</Text>
     </group>
@@ -265,14 +271,14 @@ const Interactive3DViewer = ({ description }) => {
       margin: '16px auto', borderRadius: '12px', overflow: 'hidden',
       boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
     }}>
-      <Canvas camera={{ position: [5, 6, 8], fov: 55 }} style={{ background: '#1a1a2e' }}>
+      <Canvas camera={{ position: [7, 5, -7], fov: 55 }} style={{ background: '#1a1a2e' }}>
         <ambientLight intensity={0.5} />
         <directionalLight position={[8, 10, 4]} intensity={1.0} />
         <directionalLight position={[-4, -2, -4]} intensity={0.4} />
         <GridPlane />
         <Axes />
         <ThreeGeometry geoData={geoData} />
-        <OrbitControls enableDamping dampingFactor={0.1} minDistance={2} maxDistance={30} />
+        <OrbitControls enableDamping dampingFactor={0.1} minDistance={2} maxDistance={30} target={[0, 0, 0]} />
       </Canvas>
       <div style={{
         padding: '10px 16px', backgroundColor: '#111122',

@@ -174,8 +174,8 @@ cd frontend && npm start
 
 ### 2026-06-13
 - **`\n` 换行修复**: `tryExtractJSON` 中反斜杠保护不再覆盖 `\n` 转义，同时在 `renderContent` 中将字面 `\n` 转为实际换行
-- **AI 输出质量提升**: system prompt 新增"杜绝自我质疑与犹豫"规则，禁止输出中出现 `？注意：...`、`实际上...` 等思考/推翻过程
-- **3D 坐标系修正**: `Interactive3DViewer` 坐标映射从 `[pt.x, pt.z, -pt.y]` 改为 `[pt.x, pt.z, pt.y]`，修复底面 XY 平面被绕 X 轴旋转 90° 的问题
+- **AI 输出质量提升**: system prompt 新增"杜绝自我质疑与犹豫"规则，禁止输出中出现 `？注意：...`、`实际上...` 等思考/推翻过程；提示词新增宽松化+多小问分别图像生成规则
+- **3D 坐标系修正**: 从 `[pt.x, pt.z, pt.y]` 改为右手系 `[pt.x, pt.z, -pt.y]`（(+X)×(+Y)=+Z 成立）；轴线标签上移避免被 XY 平面截断；默认相机和 OrbitControls target 设在原点
 - **LaTeX 渲染重写**: 先保护已有 `$...$`/`$$...$$` 块、再对裸 LaTeX 做 fallback 包裹；不再粗暴剥离所有 `$`
 - **JSON 解析增强**: `tryExtractJSON` 重写——括号深度扫描 + 引号缺失修复 + 反斜杠保护，解决 `\cos`/`\frac`/`\sqrt` 等被 `JSON.parse` 破坏的问题
 - **环境检测修复**: 修正 API Key 检测——由读取不存在的 `LLM_API_KEY` 改为检测 `AIHUBMIX_API_KEY` 和 `DEEPSEEK_API_KEY`

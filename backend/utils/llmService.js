@@ -388,7 +388,8 @@ class LLMService {
       '- 坐标系中画点/线/面/向量 → MATH_STATIC_EQUATION',
       '- 不等式区域/线性规划可行域 → MATH_STATIC_EQUATION',
       '- 数列图像/散点图 → MATH_STATIC_EQUATION',
-      '仅纯代数运算/纯文字逻辑推理时 needImage=false。默认优先生成图。',
+      '仅纯代数运算/纯文字逻辑推理时 needImage=false。宽松决策——只要步骤中出现了新的几何体、新图形、新视角就生成图像。',
+      '一道题的多个小问中，如果不同小问涉及不同的图形/不同的几何体/不同的函数，每个小问的步骤都要 needImage=true。',
 
       '## 输出',
       '纯JSON，不要markdown包裹。',
