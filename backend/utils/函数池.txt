@@ -1,0 +1,53 @@
+```python
+FUNCTION_POOL = {
+    "Formula_1": {
+        "latex": r"u = e^{xy^2} + \ln(x + y + z^2)",
+        "category": "多元显式超越复合函数",
+        "dimension": "3D",
+        "analytical_traits": "包含指数级暴增区域与对数级平缓区域的复合曲面"
+    },
+    "Formula_2": {
+        "latex": r"f(x) = \frac{5x - 12}{x^2 + 5x - 6}",
+        "category": "有理分式函数",
+        "dimension": "2D",
+        "singularities": [1, -6],
+        "partial_fractions": [r"\frac{2}{x+6}", r"\frac{3}{x-1}"]
+    },
+    "Formula_3": {
+        "latex": r"f(x) = \begin{cases} \frac{1+x^2}{x}\arctan x & x \neq 0 \\ 1 & x = 0 \end{cases}",
+        "category": "可去间断点修补型超越分段函数",
+        "dimension": "2D"
+    },
+    "Formula_4": {
+        "latex": [r"x - e^u - u\sin v = 0", r"y - e^u + u\sin v = 0"],
+        "category": "二维非线性隐式方程组",
+        "dimension": "High-D Mapping"
+    },
+    "Formula_5": {
+        "latex": {"P": r"2x\cos y + y^2\cos x", "Q": r"2y\sin x - x^2\sin y"},
+        "category": "全微分单连通守恒向量场",
+        "potential_function": r"u(x,y) = x^2\cos y + y^2\sin x"
+    },
+    "Formula_6": {
+        "latex": r"y' - y = x y^5",
+        "category": "一阶非线性伯努利常微分方程",
+        "linearized_form": r"z' + 4z = -4x \text{ where } z = y^{-4}"
+    },
+    "Formula_7": {
+        "latex": r"y'' - y = \frac{e^{2x}}{1+e^x} + \cos x",
+        "category": "复杂非齐次强迫振动常微分方程",
+        "homogeneous_roots": [1, -1]
+    },
+    "Formula_8": {
+        "latex": r"z = |y - x^2|",
+        "category": "绝对值非光滑复合面",
+        "dimension": "3D",
+        "crease_line": r"y = x^2"
+    },
+    "Formula_9": {
+        "latex": r"f(x) = \pi^2 - x^2",
+        "domain": [-3.14159, 3.14159],
+        "category": "周期延拓常规余弦傅里叶源",
+        "parity": "Even"
+    }
+}

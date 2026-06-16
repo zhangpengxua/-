@@ -1,6 +1,7 @@
 import { useContext } from 'react';
 import { ThemeContext } from '../theme';
 import Interactive3DViewer from './Interactive3DViewer';
+import FunctionPlot from './FunctionPlot';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -57,7 +58,10 @@ const ChatArea = ({ messages = [], isLoading, formatDate, onEditLastMessage }) =
           imageFormat: imageInfo?.imageType || 'png',
           imageType: stepResult?.imageType || 'MATH_STATIC_EQUATION',
           needImage: stepResult?.needImage || false,
-          isGeometry: stepResult?.imageType === 'MATH_STATIC_ABSTRACT' || stepResult?.imageType === 'MATH_DYNAMIC_GEOMETRY',
+          drawingData: stepResult?.drawingData || null,
+          isGeometry: stepResult?.imageType === 'MATH_STATIC_ABSTRACT' || stepResult?.imageType === 'MATH_DYNAMIC_GEOMETRY' || stepResult?.imageType === 'MATH_DYNAMIC_3D_GEOMETRY',
+          is2DPlot: stepResult?.imageType === 'MATH_STATIC_2D_FUNCTION',
+          isSurface: stepResult?.imageType === 'MATH_STATIC_SURFACE' || stepResult?.imageType === 'MATH_STATIC_IMPLICIT',
         });
       });
     } else {
@@ -207,9 +211,13 @@ const ChatArea = ({ messages = [], isLoading, formatDate, onEditLastMessage }) =
                 步骤 {part.stepId}
               </div>
 
-              {part.isGeometry ? (
+              {part.is2DPlot && part.drawingData ? (
                 <div style={{ marginBottom: theme.spacing.sm, textAlign: 'center' }}>
-                  <Interactive3DViewer description={part.description} />
+                  <FunctionPlot drawingData={part.drawingData} width={600} height={400} />
+                </div>
+              ) : (part.isGeometry || part.isSurface) ? (
+                <div style={{ marginBottom: theme.spacing.sm, textAlign: 'center' }}>
+                  <Interactive3DViewer description={part.description} drawingData={part.drawingData} imageType={part.imageType} />
                 </div>
               ) : part.imageData ? (
                 <div style={{ marginBottom: theme.spacing.sm, textAlign: 'center' }}>

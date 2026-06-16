@@ -1,0 +1,33 @@
+import matplotlib.pyplot as plt
+import numpy as np
+
+def generate_segmented_domain_plot():
+    fig, ax = plt.subplots(figsize=(7, 7))
+    
+    # [Slot 1: 注入有界闭区域边界限制数据]
+    # {{INJECT_2D_BOUNDS_CONFIG}}
+    x_matrix = np.linspace(-1.5, 1.5, 500)
+    
+    # [Slot 2: 注入核心割裂曲线轨迹方程（绝对值分界抛物线或隐式分界线）]
+    # {{INJECT_CRITICAL_CUTTING_CURVE}}
+    y_divider = {{INJECT_DIVIDER_EXPRESSION}}
+    
+    # 平面网格染色逻辑划分
+    ax.fill_between(x_matrix, -2, y_divider, where=(y_divider>=-2), color='royalblue', alpha=0.4, label='Domain Region D1')
+    ax.fill_between(x_matrix, y_divider, 2, where=(2>=y_divider), color='darkorange', alpha=0.4, label='Domain Region D2')
+    
+    # 绘制高粗度核心分界红线
+    ax.plot(x_matrix, y_divider, color='firebrick', linewidth=3.0, label='Singular/Crease Boundary')
+    
+    # [Slot 3: 奇点隔离检测分支（挖洞法专属红线/白洞补丁）]
+    if {{SINGULAR_POINT_MUTATION_TRIGGER}}:
+        sx, sy = {{INJECT_SINGULAR_POINT_COORDINATES}}
+        # 动态挖除核心奇点，使其成为拓扑安全的复连通隔离带
+        safe_hole = plt.Circle((sx, sy), radius=0.06, color='white', zorder=4)
+        ax.add_patch(safe_hole)
+        ax.plot(sx, sy, marker='o', color='purple', markersize=10, zorder=5, label='Singular Point Hazard')
+        
+    ax.grid(True, linestyle='--', alpha=0.5)
+    ax.legend(loc='upper right')
+    plt.title("Parametric 2D Domain Segmentation Map")
+    plt.show()

@@ -14,6 +14,7 @@
     "@react-three/fiber": "^8.18.0",
     "axios": "^1.6.7",
     "katex": "^0.17.0",
+    "mathjs": "^15.2.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-markdown": "^10.1.0",

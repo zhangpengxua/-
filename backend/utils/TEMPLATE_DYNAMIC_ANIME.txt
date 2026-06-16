@@ -1,0 +1,43 @@
+from manim import *
+
+class CoreDynamicEngineAnimation(ThreeDScene):
+    def construct(self):
+        # [Slot 1: 注入三维标准坐标轴与函数面系统]
+        axes = ThreeDAxes(x_range=[-3, 3], y_range=[-3, 3], z_range=[-3, 3])
+        
+        # 注入由前置条件锁定的 Manim 级函数面
+        surface_mesh = {{INJECT_MANIM_3D_SURFACE_OBJECT}}
+        
+        # 初始化相机高位透视
+        self.set_camera_orientation(phi=70 * DEGREES, theta=-45 * DEGREES)
+        self.play(Create(axes), Create(surface_mesh), run_time=1.5)
+        self.wait(0.5)
+        
+        # [Slot 2: 注入目标特征点并执行相机微观视场推进（Zoom In）]
+        pt_x, pt_y, pt_z = {{INJECT_TARGET_POINT_VALUES}}
+        target_world_coord = axes.c2p(pt_x, pt_y, pt_z)
+        anchor_dot = Dot3D(point=target_world_coord, color=PURE_RED, radius=0.1)
+        
+        self.play(FadeIn(anchor_dot))
+        # 相机精准向目标点位突进，调大微观视角以观察局部切线性质
+        self.move_camera(phi=60 * DEGREES, theta=-30 * DEGREES, zoom=3.0, run_time=1.2)
+        self.wait(0.8)
+        
+        # [Slot 3: 执行连贯分步动画状态机切换（单张/单段切换耗时严格卡死在1.0秒）]
+        # 状态分支A：绘制第一方向导数切线
+        direction_line_a = {{INJECT_TANGENT_LINE_A_CODE}}
+        self.play(Create(direction_line_a), run_time=1.0)
+        self.wait(1.0) # 严格供观察停留1秒
+        self.play(FadeOut(direction_line_a), run_time=0.3) # 消除痕迹复位
+        
+        # 状态分支B：绘制第二方向导数切线
+        direction_line_b = {{INJECT_TANGENT_LINE_B_CODE}}
+        self.play(Create(direction_line_b), run_time=1.0)
+        self.wait(1.0)
+        self.play(FadeOut(direction_line_b), run_time=0.3)
+        
+        # 状态分支C：大结局联动——生成最终切平面网格
+        final_plane = {{INJECT_TOTAL_DIFFERENTIAL_OR_TANGENT_SURFACE_CODE}}
+        self.play(Create(direction_line_a), Create(direction_line_b), run_time=0.5)
+        self.play(FadeIn(final_plane), run_time=1.0) # 1秒内平滑张开张满整个切面
+        self.wait(2.0)

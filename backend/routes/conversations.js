@@ -100,62 +100,102 @@ router.post('/:id/message', async (req, res) => {
     try {
       const context = conversation.messages.slice(0, -1).map(m => m.role + ': ' + m.content).join('\n');
 
-      const isProblem = await LLMService.classifyInput(content);
-      console.log('分类:', isProblem ? '题目→多层' : '对话→简单');
-
-      if (!isProblem) {
-        finalAnswer = await LLMService.simpleChat(context, content);
-        stepResults = [{ id: 1, description: finalAnswer, needImage: false, imageType: 'NO_IMAGE' }];
-      } else {
-        if (activeRequests[convId]?.abort) return;
-        const layer1 = await LLMService.firstLayerLLM(context, content);
+      if (activeRequests[convId]?.abort) return;
+      const layer1 = await LLMService.firstLayerLLM(context, content);
 
         // 用于存储前一步的参数，实现上下文一致性
         let previousParams = null;
+        // 清空上一轮 Claude 几何数据
+        LLMService._lastGeometryParams = null;
 
         for (const step of layer1.steps) {
           if (activeRequests[convId]?.abort) return;
           console.log(`[Step ${step.id}] needImage=${step.needImage} imageType=${step.imageType} desc=${step.description?.substring(0, 80)}`);
-          const sr = { id: step.id, description: step.description, needImage: step.needImage, imageType: step.imageType, pythonCode: null, imageData: null, executionResult: null };
+          const isFrontendType = ['MATH_STATIC_SURFACE', 'MATH_STATIC_IMPLICIT', 'MATH_STATIC_2D_FUNCTION'].includes(step.imageType);
+          const sr = {
+            id: step.id,
+            description: step.description,
+            needImage: step.needImage,
+            imageType: step.imageType,
+            drawingData: step.drawingData || null,
+            isGeometry: (step.drawingData && !isFrontendType) ? true : false,
+            pythonCode: null,
+            imageData: null,
+            imageFormat: null,
+            executionResult: null
+          };
           if (step.needImage && step.imageType !== 'NO_IMAGE') {
-            if (activeRequests[convId]?.abort) return;
-            console.log(`[Step ${step.id}] Calling secondLayerLLM for imageType=${step.imageType}...`);
+            // [前端渲染类型] 跳过 Python 执行，把 drawingData 传给前端用 mathjs 数值计算渲染
+            const FRONTEND_TYPES = ['MATH_STATIC_SURFACE', 'MATH_STATIC_IMPLICIT', 'MATH_STATIC_2D_FUNCTION'];
+            const isFrontendRender = FRONTEND_TYPES.includes(step.imageType);
 
-            // 传递前一步的参数以保持一致性
-            sr.pythonCode = await LLMService.secondLayerLLM(step.description, step.imageType, previousParams);
+            if (isFrontendRender) {
+              console.log(`[Step ${step.id}] Frontend rendering mode for ${step.imageType}, skipping Python`);
+              // 保留 drawingData，让前端 Interactive3DViewer / FunctionPlot 用 mathjs 渲染
+              sr.drawingData = step.drawingData || null;
+              sr.imageData = null;
+              sr.imageFormat = null;
+            } else {
+              if (activeRequests[convId]?.abort) return;
+              console.log(`[Step ${step.id}] Calling secondLayerLLM for imageType=${step.imageType}...`);
 
-            console.log(`[Step ${step.id}] pythonCode type=${typeof sr.pythonCode} len=${sr.pythonCode?.length || 0}`);
-            console.log(`[Step ${step.id}] pythonCode preview: ${(sr.pythonCode ? sr.pythonCode.substring(0, 200) : 'NULL')}`);
-            if (activeRequests[convId]?.abort) return;
-            const exec = await executePythonCode(sr.pythonCode);
-            sr.executionResult = exec;
-            console.log(`[Step ${step.id}] exec: success=${exec.success} imageData=${!!exec.imageData} error=${exec.error || exec.stderr?.substring(exec.stderr.length - 200)}`);
-            if (exec.success && exec.imageData) {
-              sr.imageData = exec.imageData;
-              images.push({ stepId: step.id, imageData: exec.imageData, imageType: exec.imageType || 'png' });
+              // 传递前一步的参数以保持一致性
+              sr.pythonCode = await LLMService.secondLayerLLM(step.description, step.imageType, previousParams);
+
+              console.log(`[Step ${step.id}] pythonCode type=${typeof sr.pythonCode} len=${sr.pythonCode?.length || 0}`);
+              console.log(`[Step ${step.id}] pythonCode preview: ${(sr.pythonCode ? sr.pythonCode.substring(0, 200) : 'NULL')}`);
+              if (activeRequests[convId]?.abort) return;
+              const exec = await executePythonCode(sr.pythonCode);
+              sr.executionResult = exec;
+              console.log(`[Step ${step.id}] exec: success=${exec.success} imageData=${!!exec.imageData} error=${exec.error || exec.stderr?.substring(exec.stderr.length - 200)}`);
+              if (exec.success && exec.imageData) {
+                sr.imageData = exec.imageData;
+                sr.imageFormat = exec.imageType || 'png';
+                images.push({ stepId: step.id, imageData: exec.imageData, imageType: exec.imageType || 'png' });
+              }
             }
 
-            // 提取当前步骤的参数供下一步使用
-            try {
-              const codeMatch = sr.pythonCode.match(/```python\s*([\s\S]*?)\s*```/);
-              if (codeMatch) {
-                const pythonCode = codeMatch[1];
-                // 尝试从代码中提取关键参数
-                const xRangeMatch = pythonCode.match(/ax\.set_xlim\(([^,]+),\s*([^)]+)\)/);
-                const yRangeMatch = pythonCode.match(/ax\.set_ylim\(([^,]+),\s*([^)]+)\)/);
-                const titleMatch = pythonCode.match(/ax\.set_title\('([^']+)'/);
+            // 把第一层 drawingData 透传给前端（包含 points/lines/planes/functions）
+            sr.drawingData = step.drawingData || null;
 
-                if (xRangeMatch || yRangeMatch || titleMatch) {
-                  previousParams = {
-                    xRange: xRangeMatch ? [parseFloat(xRangeMatch[1]), parseFloat(xRangeMatch[2])] : null,
-                    yRange: yRangeMatch ? [parseFloat(yRangeMatch[1]), parseFloat(yRangeMatch[2])] : null,
-                    title: titleMatch ? titleMatch[1] : null,
-                  };
-                  console.log(`[Step ${step.id}] Extracted params for next step:`, previousParams);
+            // 如果第二层 Claude 提取了 planes，补回 drawingData
+            if (LLMService._lastGeometryParams?.planes && (!sr.drawingData?.planes || sr.drawingData.planes.length === 0)) {
+              if (!sr.drawingData) sr.drawingData = { dimension: '3D', type: 'static' };
+              if (!sr.drawingData.planes) sr.drawingData.planes = [];
+              // 将 Claude 的 planes 透传给前端（保留 equation/normal/bounds 等完整信息）
+              sr.drawingData.planes = LLMService._lastGeometryParams.planes.map(pl => ({
+                name: pl.name || '面',
+                points: pl.points || [],
+                equation: pl.equation || null,
+                normal: pl.normal || null,
+                bounds: pl.bounds || null,
+                point: pl.point || null
+              })).filter(Boolean);
+              console.log(`[Step ${step.id}] Enriched drawingData with ${sr.drawingData.planes.length} planes from Claude`);
+            }
+
+            // 提取当前步骤的参数供下一步使用（仅对后端渲染类型有效）
+            if (sr.pythonCode) {
+              try {
+                const codeMatch = sr.pythonCode.match(/```python\s*([\s\S]*?)\s*```/);
+                if (codeMatch) {
+                  const pythonCode = codeMatch[1];
+                  const xRangeMatch = pythonCode.match(/ax\.set_xlim\(([^,]+),\s*([^)]+)\)/);
+                  const yRangeMatch = pythonCode.match(/ax\.set_ylim\(([^,]+),\s*([^)]+)\)/);
+                  const titleMatch = pythonCode.match(/ax\.set_title\('([^']+)'/);
+
+                  if (xRangeMatch || yRangeMatch || titleMatch) {
+                    previousParams = {
+                      xRange: xRangeMatch ? [parseFloat(xRangeMatch[1]), parseFloat(xRangeMatch[2])] : null,
+                      yRange: yRangeMatch ? [parseFloat(yRangeMatch[1]), parseFloat(yRangeMatch[2])] : null,
+                      title: titleMatch ? titleMatch[1] : null,
+                    };
+                    console.log(`[Step ${step.id}] Extracted params for next step:`, previousParams);
+                  }
                 }
+              } catch (e) {
+                console.log(`[Step ${step.id}] Failed to extract params:`, e.message);
               }
-            } catch (e) {
-              console.log(`[Step ${step.id}] Failed to extract params:`, e.message);
             }
           } else {
             console.log(`[Step ${step.id}] Skipping image generation`);
@@ -166,7 +206,6 @@ router.post('/:id/message', async (req, res) => {
         if (activeRequests[convId]?.abort) return;
         const finalR = await LLMService.thirdLayerLLM(stepResults);
         finalAnswer = finalR.finalAnswer;
-      }
     } catch (e) {
       console.error('LLM error:', e.message);
       console.error('LLM error detail:', e.response?.data ? JSON.stringify(e.response.data) : 'no detail');
@@ -181,7 +220,7 @@ router.post('/:id/message', async (req, res) => {
     conversation.messages.push({ role: 'assistant', content: finalAnswer, images, stepResults, timestamp: new Date() });
     console.log('[POST] images count:', images.length, 'stepResults count:', stepResults.length);
     for (const sr of stepResults) {
-      console.log(`[POST] step ${sr.id}: hasImg=${!!sr.imageData} needImg=${sr.needImage} imgType=${sr.imageType} codeLen=${sr.pythonCode?.length || 0} execOk=${sr.executionResult?.success} execImg=${!!sr.executionResult?.imageData}`);
+      console.log(`[POST] step ${sr.id}: hasImg=${!!sr.imageData} needImg=${sr.needImage} imgType=${sr.imageType} drawingData=${!!sr.drawingData} isGeometry=${sr.isGeometry} codeLen=${sr.pythonCode?.length || 0} execOk=${sr.executionResult?.success} execImg=${!!sr.executionResult?.imageData}`);
     }
 
     if (conversation.messages.length > 1) {

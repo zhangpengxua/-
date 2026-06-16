@@ -1,0 +1,60 @@
+# 提示词模板 - 精简版
+
+## 题目类型速查（30类）
+1. 多元显函数全微分 | 2. 隐函数方程组求偏导 | 3. 全微分反求原函数
+4. 旋转曲面截面积 | 5. 偏心区域三重积分 | 6. 绝对值二重积分
+7. 球面对称曲面积分 | 8. 投影半球面第二类曲面积分 | 9. 旋转曲面第二类曲面积分
+10. 格林公式挖洞法 | 11. 抽象函数曲面积分证明 | 12. 高斯公式法
+13. 全微分求未知函数 | 14. 路径无关曲线积分 | 15. 可分离变量微分方程
+16. 伯努利方程 | 17. 二阶齐次特征根 | 18. 待定系数法
+19. 常数变易法 | 20. 由解反求方程 | 21. 错位相减法
+22. 交错级数敛散性 | 23. 反例构造 | 24. 幂级数收敛域
+25. 逐项积微分求和 | 26. 反三角函数幂级数展开 | 27. 傅里叶展开
+28. 抽象傅里叶级数 | 29. 级数积分交织 | 30. 基础概念教学
+
+## 分类规则
+- 匹配题型 → 使用常量池/点位池，按对应模板生成步骤
+- 不匹配 → 直接提取公式，进入静态绘图
+- 可递归组合 → 拆分为多步，每步对应一个子题型
+
+## 模态分流
+- 静态：计算结果展示 → MATH_STATIC_EQUATION / MATH_STATIC_2D_FUNCTION / MATH_STATIC_SURFACE / MATH_STATIC_IMPLICIT / MATH_STATIC_ABSTRACT
+- 动态：原理教学/动点轨迹 → MATH_DYNAMIC_GEOMETRY / MATH_DYNAMIC_3D_GEOMETRY
+
+## 图像类型选择
+- 2D函数曲线(y=f(x)) → MATH_STATIC_2D_FUNCTION
+- 3D曲面(z=f(x,y),隐式曲面) → MATH_STATIC_SURFACE
+- 隐式方程 → MATH_STATIC_IMPLICIT
+- 3D几何体(棱柱/棱锥等) → MATH_STATIC_ABSTRACT
+- 一般方程/坐标系 → MATH_STATIC_EQUATION
+- 动画/动点轨迹 → MATH_DYNAMIC_GEOMETRY
+- 3D动画/旋转 → MATH_DYNAMIC_3D_GEOMETRY
+
+## drawingData 输出格式（支持点线面+函数式+隐式显式+2D3D+动静图）
+```
+{
+  "dimension": "2D" | "3D",
+  "type": "static" | "dynamic",
+  "points": [{"name":"A","x":0,"y":0,"z":0}],
+  "lines": [["A","B"]],
+  "planes": [{"normal":[1,0,0],"point":[0,0,0],"equation":"x=0"}],
+  "functions": [{"expr":"z=x^2+y^2","type":"explicit","xRange":[-5,5],"yRange":[-5,5]}]
+}
+```
+
+## 常量池
+- Formula_1: u = e^{xy^2} + ln(x+y+z^2) [多元超越, 3D]
+- Formula_2: f(x) = (5x-12)/(x^2+5x-6) [有理分式, 2D]
+- Formula_4: x=e^u+u sin v, y=e^u-u sin v [隐式方程组, 3D]
+- Formula_5: (2xcos y+y^2cos x)dx+(2ysin x-x^2sin y)dy [全微分, 3D]
+- Formula_6: y' - y = x y^5 [伯努利, 2D]
+- Formula_7: y'' - y = e^{2x}/(1+e^x) + cos x [非齐次, 2D]
+- Formula_8: z = |y - x^2| [绝对值面, 3D]
+
+## 点位池
+- Slot_Point_1: (1,-1,1) → Formula_1
+- Slot_Cylinder_2D: x^2+y^2=ax
+- Slot_Sphere_3D: x^2+y^2+z^2≤2z, center(0,0,1)
+- Slot_Parallel_Tangents: 椭球面 x^2+2y^2+z^2=1
+- Slot_Rectangular_Area: x∈[-1,1], y∈[0,2]
+- Slot_Torus_Closed: (√(x^2+y^2)-b)^2+z^2=a^2

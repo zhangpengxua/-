@@ -1,0 +1,36 @@
+GEOMETRIC_POOL = {
+    "Slot_Point_1": {
+        "coordinates": (1, -1, 1),
+        "target_formula": "Formula_1",
+        "description": "三维全微分极值斜率高亮锚定中心点"
+    },
+    "Slot_Cylinder_2D": {
+        "implicit_form": r"x^2 + y^2 - ax = 0",
+        "polar_form": r"r = a\cos\theta",
+        "description": "二维非圆心对称偏心截取圆柱面边界"
+    },
+    "Slot_Sphere_3D": {
+        "inequality": r"x^2 + y^2 + z^2 - 2z \le 0",
+        "center": (0, 0, 1),
+        "radius": 1,
+        "description": "底部紧贴原点的纵向偏心空间球体立体积分域"
+    },
+    "Slot_Parallel_Tangents": {
+        "constraint_plane": r"x - y + 2z = 0",
+        "ellipsoid": r"x^2 + 2y^2 + z^2 = 1",
+        "tangent_points": [
+            (0.4264, -0.2132, 0.8528),
+            (-0.4264, 0.2132, -0.8528)
+        ]
+    },
+    "Slot_Rectangular_Area": {
+        "bounds": {"x": [-1, 1], "y": [0, 2]},
+        "cutting_boundary": r"y = x^2",
+        "description": "被抛物线横穿裁剪的对称二维有界闭区域"
+    },
+    "Slot_Torus_Closed": {
+        "equation": r"(\sqrt{x^2+y^2} - b)^2 + z^2 = a^2",
+        "constraints": "b > a > 0",
+        "description": "空间封闭式救生圈型环面（高斯公式绝佳模型）"
+    }
+}

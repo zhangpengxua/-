@@ -29,6 +29,30 @@ const PROMPT_TEMPLATES = {
 };
 
 class LLMService {
+  /** 保存最近一次 extractGeometryParams 的原始几何数据（供 conversations.js 读取注入 drawingData） */
+  static _lastGeometryParams = null;
+  // ==================== 常量池 & 点位池 ====================
+  static FUNCTION_POOL = {
+    "Formula_1": { latex: "u = e^{xy^2} + \\ln(x + y + z^2)", category: "多元显式超越复合函数", dimension: "3D" },
+    "Formula_2": { latex: "f(x) = \\frac{5x - 12}{x^2 + 5x - 6}", category: "有理分式函数", dimension: "2D", singularities: [1, -6] },
+    "Formula_3": { latex: "f(x) = \\begin{cases} \\frac{1+x^2}{x}\\arctan x & x \\neq 0 \\\\ 1 & x = 0 \\end{cases}", category: "可去间断点修补型超越分段函数", dimension: "2D" },
+    "Formula_4": { latex: ["x - e^u - u\\sin v = 0", "y - e^u + u\\sin v = 0"], category: "二维非线性隐式方程组", dimension: "3D" },
+    "Formula_5": { latex: "(2x\\cos y+y^2\\cos x)dx+(2y\\sin x-x^2\\sin y)dy", category: "全微分单连通守恒向量场", dimension: "3D" },
+    "Formula_6": { latex: "y' - y = x y^5", category: "一阶非线性伯努利常微分方程", dimension: "2D" },
+    "Formula_7": { latex: "y'' - y = \\frac{e^{2x}}{1+e^x} + \\cos x", category: "复杂非齐次强迫振动常微分方程", dimension: "2D" },
+    "Formula_8": { latex: "z = |y - x^2|", category: "绝对值非光滑复合面", dimension: "3D", crease_line: "y = x^2" },
+    "Formula_9": { latex: "f(x) = \\pi^2 - x^2", category: "周期延拓常规余弦傅里叶源", dimension: "2D", domain: [-3.14159, 3.14159] },
+  };
+
+  static POINT_POOL = {
+    "Slot_Point_1": { coordinates: [1, -1, 1], target: "Formula_1", desc: "三维全微分极值斜率高亮锚定中心点" },
+    "Slot_Cylinder_2D": { implicit: "x^2 + y^2 - ax = 0", polar: "r = a\\cos\\theta", desc: "二维非圆心对称偏心截取圆柱面边界" },
+    "Slot_Sphere_3D": { inequality: "x^2 + y^2 + z^2 - 2z \\le 0", center: [0, 0, 1], radius: 1, desc: "底部紧贴原点的纵向偏心空间球体" },
+    "Slot_Parallel_Tangents": { constraint: "x - y + 2z = 0", ellipsoid: "x^2 + 2y^2 + z^2 = 1", desc: "椭球面平行切平面" },
+    "Slot_Rectangular_Area": { bounds: { x: [-1, 1], y: [0, 2] }, cutting: "y = x^2", desc: "被抛物线横穿裁剪的对称二维有界闭区域" },
+    "Slot_Torus_Closed": { equation: "(\\sqrt{x^2+y^2} - b)^2 + z^2 = a^2", desc: "空间封闭式救生圈型环面" },
+  };
+
   static logCall(type, model, promptLen) {
     console.log(`[LLM:${type}] model=${model} promptLen=${promptLen}`);
   }
@@ -85,8 +109,9 @@ class LLMService {
   // ==================== JSON 解析与验证 ====================
   static VALID_IMAGE_TYPES = [
     'NO_IMAGE', 'MATH_STATIC_EQUATION', 'MATH_DYNAMIC_GEOMETRY',
-    'MATH_DYNAMIC_3D_GEOMETRY',  // 新增：3D几何动画
-    'MATH_STATIC_ABSTRACT', 'CHEMISTRY_CRYSTAL', 'PHYSICS_ENGINE'
+    'MATH_DYNAMIC_3D_GEOMETRY', 'MATH_STATIC_ABSTRACT',
+    'MATH_STATIC_SURFACE', 'MATH_STATIC_2D_FUNCTION', 'MATH_STATIC_IMPLICIT',
+    'CHEMISTRY_CRYSTAL', 'PHYSICS_ENGINE'
   ];
 
   static tryExtractJSON(text) {
@@ -202,6 +227,11 @@ class LLMService {
         fixed.imageType = 'NO_IMAGE';
       }
 
+      // 保留 drawingData（如果LLM输出了包含点线面函数的丰富结构）
+      if (step.drawingData && typeof step.drawingData === 'object') {
+        fixed.drawingData = step.drawingData;
+      }
+
       fixedSteps.push(fixed);
     }
 
@@ -213,194 +243,145 @@ class LLMService {
     };
   }
 
-  // ==================== 问题分类：判断是否为理科题目 ====================
-  static async classifyInput(userInput) {
-    const systemPrompt = '你是一个输入分类器。判断用户输入是否为数学、物理、化学、几何类题目。是则输出 {"isProblem":true}，否则输出 {"isProblem":false}。只输出JSON。';
-
-    const messages = [{ role: 'user', content: '判断以下输入是否是理科题目（需要分步解题）：\n' + userInput }];
-
-    try {
-      const result = await this.callLLMChat(messages, systemPrompt, 200);
-      const parsed = this.tryExtractJSON(result);
-      if (parsed && typeof parsed.isProblem === 'boolean') {
-        return parsed.isProblem;
-      }
-      // 简单的本地判断: 包含数学/物理/化学/几何关键词
-      const problemKeywords = ['求', '解', '计算', '证明', '画图', '函数', '方程', '几何', '三角', '面积', '体积',
-        '速度', '力', '电场', '磁场', '化学', '晶胞', '反应', '质量', '浓度', '向量', '导数', '积分', '概率',
-        'x', 'y', '=', '°', '℃', 'sin', 'cos', 'tan', 'log', 'dx'];
-      return problemKeywords.some(k => userInput.toLowerCase().includes(k.toLowerCase()));
-    } catch (e) {
-      return false;
-    }
-  }
-
-  // ==================== 简单对话回复 ====================
-  static async simpleChat(context, userInput) {
-    const systemPrompt = '你是一个AI解题助手。用友好的口吻回复用户的一般性问题，引导用户提出需要解答的数学/科学问题。回复不超过3句话。';
-
-    const messages = [
-      { role: 'user', content: `${context ? '上下文：\n' + context + '\n\n' : ''}用户说：${userInput}` }
-    ];
-
-    return await this.callLLMChat(messages, systemPrompt, 300);
-  }
+  // ==================== 第一层：拆解题步骤 + 提取结构化数据 ====================
   static async firstLayerLLM(context, userInput) {
     const systemPrompt = [
       '你是一位资深理科教师。给出详尽、准确、无幻觉的解题过程。',
 
+      '## 🔹 题目类型分类（第一步：判定题型）',
+      '首先判断题目类型，从以下30个细分题型中匹配：',
+      '1. 多元显函数全微分 | 2. 隐函数方程组求偏导 | 3. 全微分反求原函数',
+      '4. 旋转曲面截面积 | 5. 偏心区域三重积分 | 6. 绝对值二重积分',
+      '7. 球面对称曲面积分 | 8. 投影半球面第二类曲面积分 | 9. 旋转曲面第二类曲面积分',
+      '10. 格林公式挖洞法 | 11. 抽象函数曲面积分证明 | 12. 高斯公式法',
+      '13. 全微分求未知函数 | 14. 路径无关曲线积分 | 15. 可分离变量微分方程',
+      '16. 伯努利方程 | 17. 二阶齐次特征根 | 18. 待定系数法',
+      '19. 常数变易法 | 20. 由解反求方程 | 21. 错位相减法',
+      '22. 交错级数敛散性 | 23. 反例构造 | 24. 幂级数收敛域',
+      '25. 逐项积微分求和 | 26. 反三角函数幂级数展开 | 27. 傅里叶展开',
+      '28. 抽象傅里叶级数 | 29. 级数积分交织 | 30. 基础概念教学',
+      '',
+      '**分类匹配规则：**',
+      '- 如果题目匹配上述题型 → 按对应题型模板生成步骤，并使用常量池/点位池',
+      '- 如果题目不匹配任何题型 → 直接提取公式和结构化数据到 drawingData，转后端渲染',
+      '- 如果题目可以通过递归组合多个题型模板 → 拆分为多步，每步对应一个子题型',
+      '',
+      '## 🔹 常量池（函数模板）',
+      '当题目未给定具体函数/参数时，从以下池中选取：',
+      'Formula_1: u = e^{xy^2} + ln(x + y + z^2)    [多元超越函数, 3D]',
+      'Formula_2: f(x) = (5x-12)/(x^2+5x-6)         [有理分式, 2D, 奇点1和-6]',
+      'Formula_4: x=e^u+u sin v, y=e^u-u sin v       [隐式方程组, 3D]',
+      'Formula_5: (2xcos y+y^2cos x)dx+(2ysin x-x^2sin y)dy  [全微分, 3D]',
+      'Formula_6: y\' - y = x y^5                      [伯努利方程, 2D]',
+      'Formula_7: y\'\' - y = e^{2x}/(1+e^x) + cos x    [非齐次方程, 2D]',
+      'Formula_8: z = |y - x^2|                       [绝对值面, 3D]',
+      '',
+      '## 🔹 点位池（几何模板）',
+      '当题目未给定具体坐标/区域时，从以下池中选取：',
+      'Slot_Point_1: (1,-1,1) → 配合Formula_1   [三维全微分锚点]',
+      'Slot_Cylinder_2D: x^2+y^2=ax                   [偏心圆柱面]',
+      'Slot_Sphere_3D: x^2+y^2+z^2≤2z, center(0,0,1) [偏心球体]',
+      'Slot_Parallel_Tangents: 椭球面 x^2+2y^2+z^2=1  [平行切平面]',
+      'Slot_Rectangular_Area: x∈[-1,1], y∈[0,2]       [二维有界区域]',
+      'Slot_Torus_Closed: (√(x^2+y^2)-b)^2+z^2=a^2    [封闭环面]',
+      '',
       '## 杜绝幻觉',
       '1. 禁止编造数据。题目未给的条件不得杜撰，假设需标注"假设…"',
       '2. 每步标注依据（定理/公式/条件）',
       '3. 不确定时列出多种可能并说明适用条件',
       '',
       '## 杜绝自我质疑与犹豫（极重要）',
-      '1. 输出是成品答案，不允许在内容中出现"？"、"注意："、"实际上……"、"等等……"、"可能是……吧"等犹豫/自我否定/推敲的语句',
-      '2. 不允许出现自问自答（如"BC∥AD，所以C的y与B相同（y=0）？注意：…"）。一旦写出结论就不能推翻或质疑',
-      '3. 每句话必须是确定性陈述。如果真有不确定性，只给确定的结论，不确定的细节省略不写',
-      '4. 动词用"设"、"解得"、"得"、"因为"、"所以"、"故"，不要用"可能是"、"大概"、"似乎"、"也许"',
-      '5. 不要在描述中暴露解题过程中的思维纠结——直接给出最终判断结果',
-
-      '## 步骤格式 - 仿照以下范例输出',
-      '每步 description 需要详细且结构化，参考格式：',
+      '1. 输出是成品答案，不允许出现"？"、"注意："、"实际上……"、"等等……"、"可能是……吧"',
+      '2. 不允许自问自答。一旦写出结论就不能推翻或质疑',
+      '3. 每句话必须是确定性陈述',
+      '4. 动词用"设"、"解得"、"得"、"因为"、"所以"、"故"',
       '',
-      '**Step N: 步骤名称**',
-      '',
-      '详细描述解题过程，使用 Markdown 格式，包括：',
+      '## 步骤格式',
+      '每步 description 详细且结构化：',
       '- **粗体** 强调关键概念和定理',
-      '- *斜体* 标注注意事项',
-      '- `代码块` 标记变量和公式',
-      '- 有序列表和无序列表组织信息',
-      '- 表格整理数据',
-      '- > 引用块标注重要结论',
-      '- **数学公式必须用 $...$ 包裹成完整表达式**。每个独立的数学公式用一个 `$...$` 包裹，不要对公式内部的单个命令单独用 `$`，正确示例：`$\\cos\\theta = \\frac{|\\overrightarrow{AC} \\cdot \\overrightarrow{PO}|}{|\\overrightarrow{AC}| \\cdot |\\overrightarrow{PO}|}$`，`$x_0^2 + y_0^2 + (z_0 - \\sqrt{2})^2 = (x_0 - \\sqrt{2})^2 + y_0^2 + z_0^2$`',
-      '- **错误示例（禁止）**：`$\\cos\\theta = \\frac{|$\\overrightarrow{AC}$  \\cdot $\\overrightarrow{PO}$|}{|$\\overrightarrow{AC}$| \\cdot |$\\overrightarrow{PO}$|}$`（公式内部多余的 $ 会破坏渲染）。不要这样写！',
-      '- **禁止使用 Unicode 下标** （如 ₁₂₃₄₅₆₇₈₉₀），始终用 LaTeX 或纯文本标记下标',
+      '- 数学公式用 $...$ 包裹成完整表达式',
+      '- 禁止使用 Unicode 下标（₁₂₃...），始终用 LaTeX',
+      '每个步骤的 description 总共不超过300字。summary 不超过100字。',
       '',
-      '**示例格式：**',
-      '',
-      '**Step 1: 设定坐标系**',
-      '',
-      '由于△ABC是等腰直角三角形，设：',
-      '',
-      'C(0,0,0), A(a,0,0), B(0,a,0)',
-      '',
-      '其中 AC = BC = a。',
-      '',
-      '因为是直棱柱且CC₁=2，所以：',
-      '',
-      'A₁(a,0,2), B₁(0,a,2), C₁(0,0,2)',
-      '',
-      'D是AB中点，故D(a/2, a/2, 0)',
-      'E是AC₁中点，故E(a/2, 0, 1)',
-      '',
-      '**顶点坐标列表：**',
-      '- A(2,0,0), B(0,2,0), C(0,0,0)',
-      '- A₁(2,0,2), B₁(0,2,2), C₁(0,0,2)',
-      '- D(1,1,0), E(1,0,1)',
-      '',
-      '**Step 2: 证明DE ∥ 平面BCC₁B₁**',
-      '',
-      'DE的方向向量：',
-      '',
-      'DE→ = E - D = (0, -1, 1)',
-      '',
-      '平面BCC₁B₁的法向量：n = (1,0,0)',
-      '',
-      '> 关键推论：因为DE与平面法向量垂直，所以DE ∥ 平面BCC₁B₁',
-      '',
-      '**长度控制：** 每个步骤的 description 总共不超过300字。summary 不超过100字。',
-      '**段落分隔：** 使用双换行 \\n\\n 分隔不同内容块，确保网页显示有合适间距。',
-
-      '## 底面顶点排布规则（重要）',
-      '',
-      '## 坐标系设定规则（必须遵守）',
-      '',
+      '## 坐标系设定规则',
       '使用标准右手直角坐标系（Z轴向上）：',
-      '- **底面放在 XY 平面上**（所有底面顶点的 z 坐标均为 0）',
-      '- **Z 轴为竖直轴**，向上为正方向，代表高度',
-      '- **右手法则**：右手四指从 X 轴弯向 Y 轴，拇指指向 Z 轴正方向',
+      '- 底面放在 XY 平面上（z = 0）',
+      '- 底面顶点按从上往下看逆时针方向排列',
       '',
-      '坐标放置：',
-      '- 原点可放在几何体的某个顶点上',
-      '- 底面在 XY 平面（z = 0），高/竖直方向沿 Z 轴正方向',
-      '- 坐标按实际题目含义自由设定，无需限制在第一卦限',
+      '  ## ⚠️ 重要：你的角色是"数据提取者"，不是画图师',
+      '你不会画画，也不需要生成任何图像。你的唯一任务是：',
+      '1. 分析题目 → 拆分为解题步骤（纯文本描述）',
+      '2. 判断每个步骤是否需要配图 → 设置 needImage / imageType',
+      '3. 如果需要配图，提取该步骤的**结构化几何/函数数据**（坐标、点、线、面、方程）输出到 drawingData',
+      '4. drawingData 会由后端 Python 引擎（matplotlib/numpy）自动渲染成图形——你完全不参与渲染过程',
       '',
-      '底面顶点命名规则：',
-      '对于几何体（如棱柱、棱锥等），在描述顶点坐标时，底面顶点必须按照',
-      '**从上往下看逆时针（CCW）** 的方向排列。这是3D渲染系统正确判定面朝向的依据。',
+      '**核心原则：你只管提取结构化数据，不负责画图。输出 drawingData 就是完成了你的"制图"职责。**',
+      '禁止在 description 中说"如图所示"、"我会画一个"、"绘制图形"等与画图相关的词汇。',
       '',
-      '具体规则：',
-      '1. 选取底面的任意一个顶点作为起点（如A）',
-      '2. 沿着底面多边形的边界，按逆时针方向依次命名后续顶点（B, C, D...）',
-      '3. 顶面的对应顶点应按相同顺序命名（A₁, B₁, C₁, D₁...）',
-      '4. 描述顶点坐标时，在顶点列表中按名称排序即可',
+      '## 数据标注规则（原骨架绘制规则）',
+      '对于3D几何题（imageType=MATH_STATIC_ABSTRACT），在description末尾列出顶点和边：',
+      '格式：A(x,y,z); B(x,y,z); ... ; A-B; B-C; ...',
       '',
-      '示例 - 正四棱柱底面（从上往下看，Z轴向下时XY面上的顶点）：',
-      '- A(1,1,0) — 右下',
-      '- B(-1,1,0) — 左上',
-      '- C(-1,-1,0) — 左下',
-      '- D(1,-1,0) — 右下',
-      '',
-      '## 骨架绘制规则（重要）',
-      '',
-      '对于需要生成3D图形的几何题（imageType=MATH_STATIC_ABSTRACT），',
-      '**必须在 description 末尾列出几何体的所有顶点坐标和所有边的连接**。',
-      '',
-      '输出格式（分号 `;` 分隔，一行一条）：',
-      '- 先列出所有顶点坐标：`A(x,y,z); B(x,y,z); C(x,y,z); D(x,y,z); ...`',
-      '- 再列出所有棱边：`A-B; B-C; C-D; D-A; ...`',
-      '',
-      '多面体骨架规则（通用）：',
-      '- **底面**：按逆时针环形连接所有底面顶点（如 A-B; B-C; C-D; D-A）',
-      '- **顶面**（棱柱/棱台）：同样逆时针环形连接所有顶面顶点',
-      '- **侧棱**：连接底面顶点与对应的顶面顶点（如 A-A1; B-B1; C-C1）',
-      '- **棱锥**：底面环形连接 + 顶点到底面每个顶点的连接',
-      '',
-      '旋转体（圆柱、圆锥、圆台）：',
-      '- 圆柱/圆台：列出上下底面圆心（如 O₁、O₂）和半径 r₁、r₂，再列出 8-12 个底面圆周上的点+对应顶面点',
-      '- 圆锥：列出底面圆心 O、半径 r，以及 8-12 个底面圆周上的点 + 顶点 V，连接 V 到底面每个点',
-      '- 对圆柱/圆台顶面、底面上的相邻周点之间都要连接',
-      '',
-      '**严格绑定规则（必须遵守）：**',
-      '- 每条边连接的两个顶点名必须已经在顶点列表中定义过',
-      '- 顶点名和边名不需要按字母序排列，但必须在列表中',
-      '- 禁止在边列表中使用未定义的顶点名',
-      '- 先写出完整的顶点列表，再写边列表',
-      '- 点坐标用数值表示，不使用表达式或含 √ 的形式',
-      '',
-      '示例 - 三棱柱 A-B-C 底面 + A₁-B₁-C₁ 顶面：',
-      'A(0,0,0); B(2,0,0); C(1,√3,0); A₁(0,0,2.5); B₁(2,0,2.5); C₁(1,√3,2.5); A-B; B-C; C-A; A₁-B₁; B₁-C₁; C₁-A₁; A-A₁; B-B₁; C-C₁',
-      '',
-      '示例 - 四棱锥 S-ABCD：',
-      'A(1,1,0); B(3,1,0); C(4,3,0); D(0.5,3,0); S(2,2,4); A-B; B-C; C-D; D-A; S-A; S-B; S-C; S-D',
-      '',
-      '示例 - 圆柱（半径1，高3）：',
-      'O₁(0,0,0); A(1,0,0); B(0.71,0.71,0); C(0,1,0); D(-0.71,0.71,0); E(-1,0,0); F(-0.71,-0.71,0); G(0,-1,0); H(0.71,-0.71,0); O₂(0,0,3); A₁(1,0,3); B₁(0.71,0.71,3); C₁(0,1,3); D₁(-0.71,0.71,3); E₁(-1,0,3); F₁(-0.71,-0.71,3); G₁(0,-1,3); H₁(0.71,-0.71,3); A-B; B-C; C-D; D-E; E-F; F-G; G-H; H-A; A₁-B₁; B₁-C₁; C₁-D₁; D₁-E₁; E₁-F₁; F₁-G₁; G₁-H₁; H₁-A₁; A-A₁; B-B₁; C-C₁; D-D₁; E-E₁; F-F₁; G-G₁; H-H₁',
+      '## ⚠️ 面提取规则（关键）',
+      '对于 drawingData 中的每个 planes（包括 auxiliaryPlanes），**必须同时包含以下字段**：',
+      '- equation: 平面方程字符串，如 "z=0", "x+y+z=1", "y=2x+1", "x^2+y^2=4"',
+      '  * 坐标系平面（XY/XZ/YZ面）直接用 z=0 / y=0 / x=0',
+      '  * 一般平面用 ax+by+cz=d 格式',
+      '- normal: 法向量 [nx, ny, nz]，垂直于平面的方向',
+      '  * XY平面 → [0,0,1]，XZ平面 → [0,1,0]，YZ平面 → [1,0,0]',
+      '- bounds: 渲染范围 [[u_min,u_max],[v_min,v_max]]，在平面局部坐标下',
+      '  * 平面范围应能完整覆盖几何体在该面上的投影',
+      '- point: 平面上一点 [x, y, z]（可选，但推荐提供以精确定位）',
+      '方程缺失将导致平面无法准确渲染，请务必提取！',
       '',
       '## 图像决策',
-      '以下情况 needImage=true：',
-      '- 函数图像（一次/二次/指数/对数/三角/幂/绝对值/分段）→ MATH_STATIC_EQUATION',
-      '- 几何/空间图形（平面几何/立体几何/向量/坐标系/解析几何/截面）→ MATH_STATIC_ABSTRACT',
+      'needImage=true 的情况：',
+      '- 2D函数图像（一次/二次/指数/对数/三角/幂/绝对值/分段）→ MATH_STATIC_2D_FUNCTION',
+      '- 3D曲面（z=f(x,y)、隐式曲面、参数曲面）→ MATH_STATIC_SURFACE',
+      '- 隐式方程（平面/曲线/曲面）→ MATH_STATIC_IMPLICIT',
+      '- 几何/空间图形（立体几何/向量/坐标系/解析几何）→ MATH_STATIC_ABSTRACT',
+      '- 一般函数图像（通配）→ MATH_STATIC_EQUATION',
       '- 动态过程（动点轨迹/图形变换/函数平移伸缩/旋转体）→ MATH_DYNAMIC_GEOMETRY',
-      '- 物理运动/力学/电路/光路 → PHYSICS_ENGINE',
-      '- 化学晶胞/分子结构/反应装置 → CHEMISTRY_CRYSTAL',
-      '- 坐标系中画点/线/面/向量 → MATH_STATIC_EQUATION',
-      '- 不等式区域/线性规划可行域 → MATH_STATIC_EQUATION',
-      '- 数列图像/散点图 → MATH_STATIC_EQUATION',
-      '仅纯代数运算/纯文字逻辑推理时 needImage=false。宽松决策——只要步骤中出现了新的几何体、新图形、新视角就生成图像。',
-      '一道题的多个小问中，如果不同小问涉及不同的图形/不同的几何体/不同的函数，每个小问的步骤都要 needImage=true。',
-
-      '## 输出',
+      '- 3D动态（空间旋转/切平面动画/曲线延伸）→ MATH_DYNAMIC_3D_GEOMETRY',
+      '- 物理 → PHYSICS_ENGINE，化学 → CHEMISTRY_CRYSTAL',
+      '仅纯代数运算/纯文字逻辑推理时 needImage=false',
+      '',
+      '## 输出格式',
       '纯JSON，不要markdown包裹。',
-      '{"steps":[{"id":1,"description":"**Step 1: ...**\\n\\n详细内容...","needImage":true,"imageType":"MATH_STATIC_ABSTRACT"}],"summary":"最终答案总结"}',
-      'imageType: NO_IMAGE | MATH_STATIC_EQUATION | MATH_DYNAMIC_GEOMETRY | MATH_STATIC_ABSTRACT | CHEMISTRY_CRYSTAL | PHYSICS_ENGINE',
+      '{',
+      '  "steps": [{',
+      '    "id": 1,',
+      '    "description": "**Step 1: ...**\\n\\n详细内容...",',
+      '    "needImage": true,',
+      '    "imageType": "MATH_STATIC_ABSTRACT",',
+      '    "drawingData": {',
+      '      "dimension": "3D",',
+      '      "type": "static",',
+      '      "points": [',
+      '        {"name":"A","x":2,"y":0,"z":0},',
+      '        {"name":"B","x":0,"y":2,"z":0},',
+      '        {"name":"C","x":-2,"y":0,"z":0},',
+      '        {"name":"O","x":0,"y":0,"z":0}',
+      '      ],',
+      '      "lines": [["A","B"],["B","C"],["C","A"],["O","A"]],',
+      '      "planes": [',
+      '        {"normal":[0,0,1],"point":[0,0,0],"equation":"z=0","bounds":[[-3,3],[-3,3]]},',
+      '        {"normal":[1,0,0],"point":[0,0,0],"equation":"x=0","bounds":[[-3,3],[-3,3]]}',
+      '      ],',
+      '      "functions": [',
+      '        {"expr":"x^2 + y^2 = 4","type":"implicit","zRange":[0,4]}',
+      '      ]',
+      '    }',
+      '  }],',
+      '  "summary": "最终答案总结"',
+      '}',
+      'imageType: NO_IMAGE | MATH_STATIC_EQUATION | MATH_STATIC_2D_FUNCTION | MATH_STATIC_SURFACE | MATH_STATIC_IMPLICIT | MATH_STATIC_ABSTRACT | MATH_DYNAMIC_GEOMETRY | MATH_DYNAMIC_3D_GEOMETRY | CHEMISTRY_CRYSTAL | PHYSICS_ENGINE',
     ].join('\n');
 
     const messages = [
       {
         role: 'user',
-        content: `${context ? '对话上下文：\n' + context + '\n\n' : ''}请解答以下问题。使用Markdown格式输出，数学公式使用LaTeX（$cos\theta$ 行内公式 或 $$\\cos\\theta = \\frac{1}{2}$$ 块级公式）。对于几何类题目（imageType=MATH_STATIC_ABSTRACT），必须在description末尾用分号分隔格式明确列出所有顶点坐标和棱边连接。只要涉及图形/函数/几何/物理/化学内容，务必标记为需要生成图像。底面顶点请按从上往下看逆时针方向排布。\n\n问题：${userInput}`
+        content: `${context ? '对话上下文：\n' + context + '\n\n' : ''}请按以下要求处理问题：\n\n1. **解题步骤**：给出详细的解题步骤文本，使用Markdown和LaTeX。\n2. **图像判断**：判断哪些步骤需要配图，设置 needImage 和 imageType。\n3. **数据提取**：需要配图的步骤，提取结构化几何/函数数据到 drawingData（坐标、点、线、面、方程）。\n\n注意：你不需要画图，也不要在描述中说"画图"或"如图所示"。你只负责提取数据，实际渲染由后端完成。\n\n**图像类型选择指南：**\n- 2D函数曲线(y=f(x))→ MATH_STATIC_2D_FUNCTION\n- 3D曲面(z=f(x,y),隐式曲面)→ MATH_STATIC_SURFACE\n- 隐式方程(平面/曲线)→ MATH_STATIC_IMPLICIT\n- 3D几何体(棱柱/棱锥等)→ MATH_STATIC_ABSTRACT\n- 一般方程/坐标系绘图→ MATH_STATIC_EQUATION\n- 动画/动点轨迹→ MATH_DYNAMIC_GEOMETRY\n- 3D动画/旋转→ MATH_DYNAMIC_3D_GEOMETRY\n- 需要具体图形且在上述类别中的 → needImage=true\n\n**drawingData 必须同时输出 points + lines + planes + functions**。\n**planes 必须包含 equation（平面方程）+ normal（法向量）+ bounds（渲染范围）**，缺少方程将导致平面无法精确渲染。\n\n只需有图形就标记needImage=true。\n\n问题：${userInput}`
       }
     ];
 
@@ -438,14 +419,22 @@ class LLMService {
     return { steps: [{ id: 1, description: userInput, needImage: false, imageType: 'NO_IMAGE' }], summary: '直接回答用户问题' };
   }
 
-  // ==================== 第二层：生成绘图代码 ====================
+  // ==================== 第二层：生成Python代码 ====================
   static async secondLayerLLM(stepDescription, imageType, previousParams = null) {
     console.log('[secondLayerLLM] imageType:', imageType, 'previousParams:', previousParams);
     // MATH_STATIC_ABSTRACT → 3D 几何体
     if (imageType === 'MATH_STATIC_ABSTRACT') {
       return this.extractGeometryParams(stepDescription, imageType, previousParams);
     }
-    // MATH_DYNAMIC_GEOMETRY 和 MATH_DYNAMIC_3D_GEOMETRY → 3D几何动画
+    // MATH_STATIC_SURFACE / MATH_STATIC_IMPLICIT → 3D曲面/隐式方程
+    if (imageType === 'MATH_STATIC_SURFACE' || imageType === 'MATH_STATIC_IMPLICIT') {
+      return this.extractSurfaceParams(stepDescription, imageType, previousParams);
+    }
+    // MATH_STATIC_2D_FUNCTION → 2D函数图像
+    if (imageType === 'MATH_STATIC_2D_FUNCTION') {
+      return this.extractFunctionPlotParams(stepDescription, imageType, previousParams);
+    }
+    // MATH_DYNAMIC_GEOMETRY 和 MATH_DYNAMIC_3D_GEOMETRY → 几何动画
     if (imageType === 'MATH_DYNAMIC_GEOMETRY' || imageType === 'MATH_DYNAMIC_3D_GEOMETRY') {
       return this.extractAnimationParams(stepDescription, previousParams);
     }
@@ -457,7 +446,11 @@ class LLMService {
   static async extractGeometryParams(stepDescription, imageType, previousParams = null) {
     console.log('[extractGeometryParams] imageType:', imageType, 'desc:', stepDescription?.substring(0, 100));
     const systemPrompt = [
-      '你是一个几何/3D建模参数提取专家。请根据题目描述精确提取绘图参数。',
+      '你是一个几何/3D建模参数提取专家。请根据题目描述精确提取结构化的几何参数。',
+      '',
+      '【核心任务】',
+      '分析题目中的几何信息，提取顶点坐标、线段、面、辅助线等数据。这些数据会被后端Python引擎（matplotlib/numpy）自动渲染成3D图形。',
+      '你不会生成图像，你只需要输出结构化的几何数据。',
       '',
       '准则：',
       '1. 仅基于题目给出的信息提取参数，不要编造未给出的坐标、尺寸',
@@ -469,16 +462,28 @@ class LLMService {
       '- title: 图形标题',
       '- points: 关键顶点坐标数组 [{"name":"A","x":0,"y":0,"z":0}, ...]，二维图形z=0',
       '- lines: 棱/边数组 [["A","B"],["B","C"],...]',
-      '- planes: 面数组 [{"name":"底面","points":["A","B","C","D"]},...]',
+      '- planes: 面数组 [{"name":"底面","points":["A","B","C","D"],"equation":"z=0","normal":[0,0,1],"bounds":[[-3,3],[-3,3]]},...]',
+      '  * equation: 平面方程（如"z=0","x+y+z=1","y=2x"），用于数学精确渲染',
+      '  * normal: 法向量 [nx,ny,nz]，确定平面朝向',
+      '  * bounds: 渲染范围 [[u_min,u_max],[v_min,v_max]]（沿平面局部UV坐标）',
+      '- auxiliaryPlanes: 辅助面数组 [{"name":"截面","points":["A","B","C"],"equation":"x+y+z=1","normal":[1,1,1],"bounds":[[-3,3],[-3,3]]},...]',
       '- highlightPoints: 需突出显示的点名数组',
       '- highlightLines: 需突出显示的线段数组',
       '- auxiliaryLines: 辅助线数组，如["A-D","B-E"]，这些线会用虚线和不同颜色显示',
-      '- auxiliaryPlanes: 辅助面数组 [{"name":"截面","points":["A","B","C"]},...]，同一辅助面的线条颜色一致',
       '- lineStyles: 自定义线条样式 {"A-B":{"color":"red","lineStyle":"--","lineWidth":3}}',
       '- viewAngle: 3D视角 [elevation, azimuth]，如[30, 45]',
       '',
       '重要提示：',
       '- 辅助线是题目中提到的辅助线、延长线、连接线等非主体线条',
+      '- 【面提取规则】对于立体几何图形（三棱柱、四棱柱、棱锥、棱台、圆柱、圆锥、圆台等），必须提取 ALL 外表面',
+      '  * 三棱柱：2个三角形底面 + 3个矩形侧面 = 5个面',
+      '  * 四棱柱/长方体：2个矩形底面 + 4个矩形侧面 = 6个面',
+      '  * 三棱锥/四面体：4个三角形面',
+      '  * 四棱锥：1个矩形底面 + 4个三角形侧面 = 5个面',
+      '  * 圆台/棱台：2个底面 + 侧面（不要遗漏）',
+      '- 每个面必须提取其数学方程（equation）和法向量（normal），用于精确确定平面位置',
+      '  * 例如底面在 z=0 平面 → equation:"z=0", normal:[0,0,1]',
+      '  * 侧面过某点且法向量已知 → equation:"x+y+z=2", normal:[1,1,1]',
       '- 辅助面是题目中提到的截面、辅助平面等',
       '- 同一辅助面的所有线条应该使用相同的颜色',
       '- 辅助线应该用虚线显示，主体线条用实线',
@@ -492,10 +497,35 @@ class LLMService {
       '- 正方体：8个顶点，12条棱，6个面，默认边长2',
       '- 正四面体：4个顶点，6条棱',
       '- 三棱柱：6个顶点，9条棱',
+      '',
+      '=== 圆台输出示例（参考格式，非实际数值） ===',
+      '对于圆台/棱台等立体，必须用 planes 列出所有外表面（上下底面+每个侧面）：',
+      '{',
+      '  "title": "圆台几何结构",',
+      '  "points": [',
+      '    {"name":"A1","x":2,"y":0,"z":0}, {"name":"B1","x":0,"y":2,"z":0},',
+      '    {"name":"C1","x":-2,"y":0,"z":0}, {"name":"D1","x":0,"y":-2,"z":0},',
+      '    {"name":"A2","x":1,"y":0,"z":4}, {"name":"B2","x":0,"y":1,"z":4},',
+      '    {"name":"C2","x":-1,"y":0,"z":4}, {"name":"D2","x":0,"y":-1,"z":4},',
+      '    {"name":"O1","x":0,"y":0,"z":0}, {"name":"O2","x":0,"y":0,"z":4}',
+      '  ],',
+      '  "lines": [["A1","B1"],["B1","C1"],["C1","D1"],["D1","A1"],',
+      '            ["A2","B2"],["B2","C2"],["C2","D2"],["D2","A2"],',
+      '            ["A1","A2"],["B1","B2"],["C1","C2"],["D1","D2"]],',
+      '  "planes": [',
+      '    {"name":"下底面","points":["A1","B1","C1","D1"],"equation":"z=0","normal":[0,0,1],"bounds":[[-3,3],[-3,3]]},',
+      '    {"name":"上底面","points":["A2","B2","C2","D2"],"equation":"z=4","normal":[0,0,1],"bounds":[[-3,3],[-3,3]]},',
+      '    {"name":"侧面1","points":["A1","B1","B2","A2"],"equation":"y=0","normal":[0,1,0],"bounds":[[-3,3],[0,4]]},',
+      '    {"name":"侧面2","points":["B1","C1","C2","B2"],"equation":"x=0","normal":[1,0,0],"bounds":[[-3,3],[0,4]]},',
+      '    {"name":"侧面3","points":["C1","D1","D2","C2"],"equation":"y=0","normal":[0,-1,0],"bounds":[[-3,3],[0,4]]},',
+      '    {"name":"侧面4","points":["D1","A1","A2","D2"],"equation":"x=0","normal":[-1,0,0],"bounds":[[-3,3],[0,4]]}',
+      '  ],',
+      '  "viewAngle": [25, 35]',
+      '}',
     ].join('\n');
 
     let userPrompt = [
-      '请根据以下解题步骤中的几何信息，提取精确的绘图参数。',
+      '请根据以下解题步骤中的几何信息，提取精确的结构化几何数据（点、线、面、辅助线）。你不会画图，这些数据会被后端引擎自动渲染。',
       '',
       '解题步骤：' + stepDescription,
       '',
@@ -526,6 +556,8 @@ class LLMService {
           .replace(/\\n/g, '\x00NL\x00')
           .replace(/(?<!\\)\\([a-zA-Z])/g, '\\\\$1')
           .replace(/\x00NL\x00/g, '\\n'));
+        // 保存几何参数供 conversations.js 注入到 drawingData（前端渲染 planes 需要）
+        this._lastGeometryParams = params;
         return this.generateGeometryCode(params, imageType);
       }
       throw new Error('No JSON found in geometry params response');
@@ -546,10 +578,84 @@ class LLMService {
     }
   }
 
+  // ==================== 提取曲面参数（3D曲面/隐式方程） ====================
+  static async extractSurfaceParams(stepDescription, imageType, previousParams = null) {
+    console.log('[extractSurfaceParams] imageType:', imageType);
+    const systemPrompt = [
+      '你是一个3D曲面参数提取专家。请从题目描述中提取曲面数据。你不会生成图像，你只需要输出结构化的曲面数据，后端Python引擎会自动渲染。',
+      '',
+      '准则：',
+      '1. 仅基于题目给出的信息提取参数',
+      '2. 坐标值必须是数值，不是表达式',
+      '3. 输出仅包含JSON对象，无其他文字',
+      '',
+      '参数说明：',
+      '- title: 图形标题',
+      '- surfaceType: 曲面类型 "explicit"(z=f(x,y)) / "implicit"(f(x,y,z)=0) / "parametric"(x=f(u,v),y=g(u,v),z=h(u,v))',
+      '- surfaceEquation: 曲面方程表达式，如 "z = x^2 + y^2"',
+      '- xRange: x轴范围 [min, max]',
+      '- yRange: y轴范围 [min, max]',
+      '- zRange: z轴范围 [min, max]（可选）',
+      '- resolution: 网格分辨率，默认50',
+      '- points: 需标注的关键点 [{name:"P",x:0,y:0,z:0}]',
+      '- planes: 需渲染的平面 [{normal:[nx,ny,nz],point:[px,py,pz],equation:"x=0",bounds:[[-3,3],[-3,3]]}]  // bounds为平面局部坐标范围',
+      '- viewAngle: 3D视角 [elevation, azimuth]',
+      '',
+      '输出示例：',
+      '{"title":"曲面 z=x^2+y^2","surfaceType":"explicit","surfaceEquation":"z = x^2 + y^2","xRange":[-2,2],"yRange":[-2,2],"points":[{"name":"P","x":0,"y":0,"z":0}],"planes":[{"normal":[0,0,1],"point":[0,0,0],"equation":"z = 0","bounds":[[-3,3],[-3,3]]}],"viewAngle":[30,45]}',
+    ].join('\n');
+
+    const userPrompt = [
+      '请从以下解题步骤中提取曲面数据（方程式、范围、关键点）。你不会画图，这些数据会被后端引擎自动渲染。',
+      '解题步骤：' + stepDescription,
+      '图像类型：' + (imageType === 'MATH_STATIC_IMPLICIT' ? '隐式曲面/方程' : '3D曲面'),
+    ].join('\n');
+
+    const result = await this.callLLMImage([{ role: 'user', content: userPrompt }], systemPrompt, 2000);
+    const parsed = this.tryExtractJSON(result);
+    if (parsed) {
+      return this.generateSurfaceCode(parsed, imageType);
+    }
+    return this.generateFallbackCode(stepDescription, imageType);
+  }
+
+  // ==================== 提取2D函数图像参数 ====================
+  static async extractFunctionPlotParams(stepDescription, imageType, previousParams = null) {
+    console.log('[extractFunctionPlotParams] imageType:', imageType);
+    const systemPrompt = [
+      '你是一个2D函数图像参数提取专家。请从题目描述中提取函数数据。你不会生成图像，你只需要输出结构化的函数数据，后端Python引擎会自动渲染。',
+      '',
+      '准则：',
+      '1. 仅基于题目给出的信息提取参数',
+      '2. 输出仅包含JSON对象，无其他文字',
+      '',
+      '参数说明：',
+      '- title: 图形标题',
+      '- functions: 函数列表 [{expr:"x^2", color:"blue", label:"y=x^2", lineStyle:"-"}]',
+      '- xRange: x轴范围 [min, max]',
+      '- yRange: y轴范围 [min, max]（可选）',
+      '- points: 需标注的关键点 [{name:"P",x:1,y:1}]',
+      '- showGrid: 是否显示网格 true/false',
+      '- showLegend: 是否显示图例 true/false',
+      '',
+      '输出示例：',
+      '{"title":"函数图像","functions":[{"expr":"x^2","color":"blue","label":"y=x^2"},{"expr":"2*x+1","color":"red","label":"y=2x+1"}],"xRange":[-5,5],"points":[{"name":"P","x":1,"y":1}],"showGrid":true}',
+    ].join('\n');
+
+    const userPrompt = '请从以下解题步骤中提取2D函数数据（表达式、范围、关键点）。你不会画图，这些数据会被后端引擎自动渲染。\n解题步骤：' + stepDescription;
+
+    const result = await this.callLLMImage([{ role: 'user', content: userPrompt }], systemPrompt, 2000);
+    const parsed = this.tryExtractJSON(result);
+    if (parsed) {
+      return this.generateFunctionPlotCode(parsed, imageType);
+    }
+    return this.generateFallbackCode(stepDescription, imageType);
+  }
+
   // ==================== 提取函数参数 ====================
   static async extractFunctionParams(stepDescription, imageType, previousParams = null) {
     const systemPrompt = [
-      '你是一个函数参数提取专家。请根据题目描述提取函数绘图所需的参数。',
+      '你是一个函数参数提取专家。请根据题目描述提取函数数据。你不会生成图像，你只需要输出结构化的函数方程和范围数据，后端Python引擎会自动渲染。',
       '',
       '准则：',
       '1. 仅基于题目给出的函数/数据提取参数',
@@ -592,7 +698,7 @@ class LLMService {
       : '默认图形';
 
     let userPrompt = [
-      '请根据以下解题步骤提取函数绘图参数。',
+      '请根据以下解题步骤提取函数数据（方程、范围、关键点）。你不会画图，这些数据会被后端引擎自动渲染。',
       '',
       '解题步骤：' + stepDescription,
       '',
@@ -720,7 +826,8 @@ class LLMService {
         .replace(/₆/g, '6')
         .replace(/₇/g, '7')
         .replace(/₈/g, '8')
-        .replace(/₉/g, '9');
+        .replace(/₉/g, '9')
+        .replace(/'/g, '_p');      // O' → O_p，避免 Python 语法错误
       pointNameMap[p.name] = pythonName;
       return `${pythonName} = (${p.x}, ${p.y}, ${p.z})`;
     }).join('\n');
@@ -785,30 +892,266 @@ class LLMService {
       lineCode += `ax.plot([${pointNameMap[line[0]]}[0], ${pointNameMap[line[1]]}[0]], [${pointNameMap[line[0]]}[1], ${pointNameMap[line[1]]}[1]], [${pointNameMap[line[0]]}[2], ${pointNameMap[line[1]]}[2]], color='${color}', linewidth=${lw}, linestyle='${linestyle}')\n`;
     });
 
-    // 绘制辅助面（填充多边形）- 使用半透明颜色，与主体形成对比
+    // 读取主体面（planes）和辅助面（auxiliaryPlanes）
+    const planes = params.planes || [];
+
+    // 绘制主体面
     let planeCode = '';
     const planeColors = ['#e1bee7', '#bbdefb', '#c8e6c9', '#fff9c4', '#ffe0b2', '#b2ebf2'];
-    auxiliaryPlanes.forEach((plane, index) => {
+    let needPoly3D = false;
+
+    // 辅助函数：生成用方程渲染平面的 Python 代码
+    function buildEquationPlaneCode(plane, color, alphaVal) {
+      const normal = plane.normal || [0, 0, 1];
+      const point = plane.point || [0, 0, 0];
+      const bounds = plane.bounds || [[-3, 3], [-3, 3]];
+      const eq = plane.equation || '';
+      // 如果提供了 equation 且 normal/bounds 齐全，用数学方式渲染
+      const [a, b, c] = normal;
+      needPoly3D = true;
+      let code = `# 数学平面：${plane.name || '未命名'} (${eq})\n`;
+      // 生成两条平面内正交向量
+      code += `n = np.array([${a}, ${b}, ${c}])\n`;
+      code += `p0 = np.array([${point[0]}, ${point[1]}, ${point[2]}])\n`;
+      code += `if abs(n[2]) > 1e-8:\n    u_vec = np.array([1, 0, -n[0]/n[2]])\n    v_vec = np.array([0, 1, -n[1]/n[2]])\n`;
+      code += `elif abs(n[1]) > 1e-8:\n    u_vec = np.array([1, -n[0]/n[1], 0])\n    v_vec = np.array([0, -n[2]/n[1], 1])\n`;
+      code += `else:\n    u_vec = np.array([0, 1, 0])\n    v_vec = np.array([0, 0, 1])\n`;
+      code += `u_vec = u_vec / np.linalg.norm(u_vec)\nv_vec = v_vec / np.linalg.norm(v_vec)\n`;
+      code += `u = np.linspace(${bounds[0][0]}, ${bounds[0][1]}, 12)\n`;
+      code += `v = np.linspace(${bounds[1][0]}, ${bounds[1][1]}, 12)\n`;
+      code += `uu, vv = np.meshgrid(u, v)\n`;
+      code += `xx = p0[0] + u_vec[0]*uu + v_vec[0]*vv\n`;
+      code += `yy = p0[1] + u_vec[1]*uu + v_vec[1]*vv\n`;
+      code += `zz = p0[2] + u_vec[2]*uu + v_vec[2]*vv\n`;
+      code += `surf = ax.plot_surface(xx, yy, zz, alpha=${alphaVal}, color='${color}', edgecolor='${primaryColors[0]}', linewidth=0.5, antialiased=True)\n\n`;
+      return code;
+    }
+
+    // 主体面
+    planes.forEach((plane, index) => {
       const planeColor = planeColors[index % planeColors.length];
-      // 使用映射后的变量名
-      const planePoints = plane.points.map(p => pointNameMap[p] || p);
-      if (planePoints.length >= 3) {
-        const pointsArray = planePoints.map(p => `${p}[0], ${p}[1], ${p}[2]`).join(', ');
-        planeCode += `# 辅助面：${plane.name || '未命名'}\n`;
-        planeCode += `plane_points = np.array([[${pointsArray}]])\n`;
-        planeCode += `from mpl_toolkits.mplot3d.art3d import Poly3DCollection\n`;
-        planeCode += `poly = Poly3DCollection([plane_points], alpha=0.2, facecolor='${planeColor}', edgecolor='${auxiliaryLineColors[index % auxiliaryLineColors.length]}', linewidth=1.5, linestyle='--')\n`;
+      // 如果平面有 equation/normal/bounds，用数学方式渲染
+      if (plane.equation && plane.normal && plane.bounds) {
+        planeCode += buildEquationPlaneCode(plane, planeColor, 0.25);
+        return;
+      }
+      // 否则用多边形填充（兼容旧格式）
+      const pts = plane.points ? plane.points.map(p => pointNameMap[p] || p) : [];
+      if (pts.length >= 3) {
+        needPoly3D = true;
+        const pointsArray = pts.map(p => `[${p}[0], ${p}[1], ${p}[2]]`).join(', ');
+        planeCode += `# 面：${plane.name || '未命名'}\n`;
+        planeCode += `face_pts = np.array([${pointsArray}])\n`;
+        planeCode += `poly = Poly3DCollection([face_pts], alpha=0.25, facecolor='${planeColor}', edgecolor='${primaryColors[0]}', linewidth=1.0, linestyle='-')\n`;
         planeCode += `ax.add_collection3d(poly)\n\n`;
       }
     });
 
+    // 辅助面
+    auxiliaryPlanes.forEach((plane, index) => {
+      const planeColor = planeColors[index % planeColors.length];
+      // 如果辅助平面有 equation/normal/bounds，用数学方式渲染
+      if (plane.equation && plane.normal && plane.bounds) {
+        planeCode += buildEquationPlaneCode(plane, planeColor, 0.15);
+        return;
+      }
+      // 否则用多边形填充（兼容旧格式）
+      const pts = plane.points ? plane.points.map(p => pointNameMap[p] || p) : [];
+      if (pts.length >= 3) {
+        needPoly3D = true;
+        const pointsArray = pts.map(p => `[${p}[0], ${p}[1], ${p}[2]]`).join(', ');
+        planeCode += `# 辅助面：${plane.name || '未命名'}\n`;
+        planeCode += `aux_pts = np.array([${pointsArray}])\n`;
+        planeCode += `poly = Poly3DCollection([aux_pts], alpha=0.15, facecolor='${planeColor}', edgecolor='${auxiliaryLineColors[index % auxiliaryLineColors.length]}', linewidth=1.5, linestyle='--')\n`;
+        planeCode += `ax.add_collection3d(poly)\n\n`;
+      }
+    });
+
+    // 如有面，在最前面插入 import
+    // 检查是否有基于 points 的多边形面（需要 Poly3DCollection），
+    // 方程面使用 plot_surface 不需要额外 import（Axes3D 已提供）
+    const hasPolygonPlanes = [...planes, ...auxiliaryPlanes].some(
+      p => !(p.equation && p.normal && p.bounds)
+    );
+    if (hasPolygonPlanes && needPoly3D) {
+      planeCode = 'from mpl_toolkits.mplot3d.art3d import Poly3DCollection\n' + planeCode;
+    }
+
     const scatterCode = points.map(p =>
-      `ax.scatter(${p.x}, ${p.y}, ${p.z}, c='${primaryColors[0]}', s=80, edgecolors='white', linewidths=2)\nax.text(${p.x}+0.15, ${p.y}+0.15, ${p.z}+0.15, '${p.name}', fontsize=14, fontweight='bold', color='${primaryColors[0]}')`
+      `ax.scatter(${p.x}, ${p.y}, ${p.z}, c='${primaryColors[0]}', s=80, edgecolors='white', linewidths=2)\nax.text(${p.x}+0.15, ${p.y}+0.15, ${p.z}+0.15, '${p.name.replace(/'/g, "\\'")}', fontsize=14, fontweight='bold', color='${primaryColors[0]}')`
     ).join('\n');
 
     // Emit the vertices and edges as a comment in the Python code for the 3D viewer
     const geoComment = `# 3D_GEOMETRY_DATA|${verticesDesc}|${edgesDesc}\n`;
-    return geoComment + '```python\nimport matplotlib.pyplot as plt\nfrom mpl_toolkits.mplot3d import Axes3D\nimport numpy as np\n\nplt.rcParams[\'font.sans-serif\'] = [\'SimHei\', \'DejaVu Sans\']\nplt.rcParams[\'axes.unicode_minus\'] = False\n\nfig = plt.figure(figsize=(12, 8), facecolor=\'white\')\nax = fig.add_subplot(111, projection=\'3d\')\nax.set_facecolor(\'#fafafa\')\n\n' + pointCode + '\n\n# 基础线条\n' + lineCode + '\n# 辅助面\n' + planeCode + '\n# 散点 + 标注\n' + scatterCode + '\n\nax.set_title(\'' + title + '\', fontsize=16, fontweight=\'bold\', pad=20, color=\'#1a237e\')\nax.set_xlabel(\'X\', fontsize=13, fontweight=\'bold\', color=\'#37474f\')\nax.set_ylabel(\'Y\', fontsize=13, fontweight=\'bold\', color=\'#37474f\')\nax.set_zlabel(\'Z\', fontsize=13, fontweight=\'bold\', color=\'#37474f\')\nax.grid(True, linestyle=\'--\', alpha=0.4, color=\'#90a4ae\')\nax.view_init(elev=' + viewAngle[0] + ', azim=' + viewAngle[1] + ')\n\nplt.tight_layout()\nplt.savefig(\'/tmp/figure.png\', dpi=150, bbox_inches=\'tight\', facecolor=\'white\')\nprint("Done")\n```';
+    return geoComment + '```python\nimport matplotlib.pyplot as plt\nfrom mpl_toolkits.mplot3d import Axes3D\nimport numpy as np\n\nplt.rcParams[\'font.sans-serif\'] = [\'SimHei\', \'DejaVu Sans\']\nplt.rcParams[\'axes.unicode_minus\'] = False\n\nfig = plt.figure(figsize=(12, 8), facecolor=\'white\')\nax = fig.add_subplot(111, projection=\'3d\')\nax.set_facecolor(\'#fafafa\')\n\n' + pointCode + '\n\n# 基础线条\n' + lineCode + '\n# 辅助面\n' + planeCode + '\n# 散点 + 标注\n' + scatterCode + '\n\nax.set_title(\'' + this.escapePythonString(title) + '\', fontsize=16, fontweight=\'bold\', pad=20, color=\'#1a237e\')\nax.set_xlabel(\'X\', fontsize=13, fontweight=\'bold\', color=\'#37474f\')\nax.set_ylabel(\'Y\', fontsize=13, fontweight=\'bold\', color=\'#37474f\')\nax.set_zlabel(\'Z\', fontsize=13, fontweight=\'bold\', color=\'#37474f\')\nax.grid(True, linestyle=\'--\', alpha=0.4, color=\'#90a4ae\')\nax.view_init(elev=' + viewAngle[0] + ', azim=' + viewAngle[1] + ')\n\nplt.tight_layout()\nplt.savefig(\'/tmp/figure.png\', dpi=150, bbox_inches=\'tight\', facecolor=\'white\')\nprint("Done")\n```';
+  }
+
+  // ==================== 生成曲面代码（3D曲面/隐式方程） ====================
+  static generateSurfaceCode(params, imageType) {
+    const { title, surfaceType, surfaceEquation, xRange, yRange, zRange, resolution, points, planes, viewAngle } = params;
+    const titleEscaped = this.escapePythonString(title);
+    const eqEscaped = this.escapePythonString(surfaceEquation || '');
+    const xr = xRange || [-3, 3];
+    const yr = yRange || [-3, 3];
+    const zr = zRange || [-3, 3];
+    const res = resolution || 50;
+    const va = viewAngle || [30, 45];
+
+    let surfacePlotCode = '';
+    if (surfaceType === 'explicit') {
+      // 移除 "z = " 前缀，转换 ^ 为 **，并映射 x→X, y→Y
+      const explicitExpr = eqEscaped
+        .replace(/^z\s*=\s*/, '')
+        .replace(/\^/g, '**')
+        .replace(/\bx\b/g, 'X').replace(/\by\b/g, 'Y');
+      surfacePlotCode = `# 显式曲面 z = f(x,y)\nX = np.linspace(${xr[0]}, ${xr[1]}, ${res})\nY = np.linspace(${yr[0]}, ${yr[1]}, ${res})\nX, Y = np.meshgrid(X, Y)\nZ = ${explicitExpr}\nsurf = ax.plot_surface(X, Y, Z, cmap='viridis', alpha=0.8, edgecolor='none')\nfig.colorbar(surf, ax=ax, shrink=0.5, aspect=10)`;
+    } else if (surfaceType === 'implicit') {
+      // 移除方程中的 "= 0" 或 "== 0"，转换 ^ 为 **，映射 x→X, y→Y, z→Z
+      let implicitExpr = (eqEscaped || '')
+        .replace(/=\s*0\s*$/, '')    // 去掉尾部的 =0
+        .replace(/==\s*0\s*$/, '')   // 去掉尾部的 ==0
+        .replace(/\^/g, '**')        // Python 幂运算
+        .replace(/\bx\b/g, 'X').replace(/\by\b/g, 'Y').replace(/\bz\b/g, 'Z');
+      if (!implicitExpr.trim()) implicitExpr = eqEscaped.replace(/\^/g, '**').replace(/\bx\b/g, 'X').replace(/\by\b/g, 'Y').replace(/\bz\b/g, 'Z');
+      surfacePlotCode = `# 隐式曲面 f(x,y,z)=0（等值面）\n# 使用 marching_cubes 近似\nfrom skimage import measure\nX = np.linspace(${xr[0]}, ${xr[1]}, ${res})\nY = np.linspace(${yr[0]}, ${yr[1]}, ${res})\nZ = np.linspace(${zr[0]}, ${zr[1]}, ${res})\nX, Y, Z = np.meshgrid(X, Y, Z, indexing='ij')\nF = ${implicitExpr}\nverts, faces, _, _ = measure.marching_cubes(F, level=0, spacing=((${xr[1]}-${xr[0]})/${res}, (${yr[1]}-${yr[0]})/${res}, (${zr[1]}-${zr[0]})/${res}))\nverts[:, 0] += ${xr[0]}\nverts[:, 1] += ${yr[0]}\nverts[:, 2] += ${zr[0]}\nax.plot_trisurf(verts[:, 0], verts[:, 1], faces, verts[:, 2], cmap='viridis', alpha=0.8)`;
+    } else {
+      surfacePlotCode = `# 参数曲面\n# 简化处理：生成网格\nX = np.linspace(${xr[0]}, ${xr[1]}, ${res})\nY = np.linspace(${yr[0]}, ${yr[1]}, ${res})\nX, Y = np.meshgrid(X, Y)\nZ = np.zeros_like(X)\nax.plot_surface(X, Y, Z, cmap='viridis', alpha=0.8)`;
+    }
+
+    let pointCode = '';
+    if (points) {
+      for (const p of points) {
+        pointCode += `ax.scatter([${p.x}], [${p.y}], [${p.z}], color='red', s=80)\nax.text(${p.x}, ${p.y}, ${p.z}, '${p.name}', fontsize=12, color='red')\n`;
+      }
+    }
+
+    let planeCode = '';
+    if (planes) {
+      for (const pl of planes) {
+        const n = pl.normal, pt = pl.point;
+        planeCode += `# 平面: ${pl.equation}\n`;
+        planeCode += `xx, yy = np.meshgrid(np.linspace(${xr[0]}, ${xr[1]}, 10), np.linspace(${yr[0]}, ${yr[1]}, 10))\n`;
+        planeCode += `zz = (${n[0]}*(${pt[0]}-xx) + ${n[1]}*(${pt[1]}-yy)) / ${n[2] || 1} + ${pt[2]}\n`;
+        planeCode += `ax.plot_surface(xx, yy, zz, alpha=0.3, color='cyan')\n`;
+      }
+    }
+
+    return `\`\`\`python
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+import numpy as np
+import warnings
+warnings.filterwarnings('ignore')
+
+plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False
+
+fig = plt.figure(figsize=(12, 8), facecolor='white')
+ax = fig.add_subplot(111, projection='3d')
+ax.set_facecolor('#fafafa')
+
+${surfacePlotCode}
+
+${pointCode}
+${planeCode}
+
+ax.set_title('${titleEscaped}', fontsize=16, fontweight='bold', pad=20, color='#1a237e')
+ax.set_xlabel('X', fontsize=13, fontweight='bold')
+ax.set_ylabel('Y', fontsize=13, fontweight='bold')
+ax.set_zlabel('Z', fontsize=13, fontweight='bold')
+ax.grid(True, linestyle='--', alpha=0.4)
+ax.view_init(elev=${va[0]}, azim=${va[1]})
+
+plt.tight_layout()
+plt.savefig('/tmp/figure.png', dpi=150, bbox_inches='tight', facecolor='white')
+print("Done")
+\`\`\``;
+  }
+
+  // ==================== 生成2D函数图像代码 ====================
+  static generateFunctionPlotCode(params, imageType) {
+    const { title, functions, xRange, yRange, points, showGrid, showLegend } = params;
+    const titleEscaped = this.escapePythonString(title);
+    const xr = xRange || [-5, 5];
+    const yr = yRange || [-5, 5];
+    const grid = showGrid !== false;
+
+    let funcCode = '';
+    const funcs = functions || [{ expr: 'x^2', color: 'blue', label: 'f(x)' }];
+    for (const f of funcs) {
+      const expr = f.expr.replace(/\^/g, '**');
+      const color = f.color || 'blue';
+      const label = this.escapePythonString(f.label || f.expr);
+      const ls = f.lineStyle || '-';
+      funcCode += `y = ${expr}\nax.plot(x, y, color='${color}', linewidth=2, linestyle='${ls}', label='${label}')\n`;
+    }
+
+    let pointCode = '';
+    if (points) {
+      for (const p of points) {
+        pointCode += `ax.scatter([${p.x}], [${p.y}], color='red', s=80, zorder=5)\nax.annotate('${p.name}', (${p.x}, ${p.y}), textcoords="offset points", xytext=(0,10), ha='center', fontsize=12, color='red')\n`;
+      }
+    }
+
+    const legendCode = showLegend !== false ? 'ax.legend(fontsize=12, loc=\'best\')' : '';
+
+    return `\`\`\`python
+import matplotlib.pyplot as plt
+import numpy as np
+
+plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False
+
+fig, ax = plt.subplots(figsize=(10, 7), facecolor='white')
+ax.set_facecolor('#fafafa')
+
+x = np.linspace(${xr[0]}, ${xr[1]}, 1000)
+
+${funcCode}
+
+${pointCode}
+
+ax.set_title('${titleEscaped}', fontsize=16, fontweight='bold', color='#1a237e')
+ax.set_xlabel('x', fontsize=13, fontweight='bold')
+ax.set_ylabel('y', fontsize=13, fontweight='bold')
+ax.set_xlim(${xr[0]}, ${xr[1]})
+ax.set_ylim(${yr[0]}, ${yr[1]})
+${grid ? "ax.grid(True, linestyle='--', alpha=0.4)" : ''}
+${legendCode}
+
+plt.tight_layout()
+plt.savefig('/tmp/figure.png', dpi=150, bbox_inches='tight', facecolor='white')
+print("Done")
+\`\`\``;
+  }
+
+  // ==================== 降级Fallback代码 ====================
+  static generateFallbackCode(stepDescription, imageType) {
+    const title = this.escapePythonString(stepDescription?.substring(0, 50) || '图形');
+    return `\`\`\`python
+import matplotlib.pyplot as plt
+import numpy as np
+
+plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False
+
+fig, ax = plt.subplots(figsize=(10, 7), facecolor='white')
+ax.set_facecolor('#fafafa')
+
+x = np.linspace(-5, 5, 200)
+y = x**2
+ax.plot(x, y, 'b-', linewidth=2, label='y = x^2')
+
+ax.set_title('${title}', fontsize=16, fontweight='bold')
+ax.set_xlabel('x', fontsize=13)
+ax.set_ylabel('y', fontsize=13)
+ax.grid(True, linestyle='--', alpha=0.4)
+ax.legend()
+
+plt.tight_layout()
+plt.savefig('/tmp/figure.png', dpi=150, bbox_inches='tight', facecolor='white')
+print("Done")
+\`\`\``;
   }
 
   static generateFunctionCode(params, imageType) {
@@ -995,7 +1338,8 @@ ani = animation.FuncAnimation(fig, update, frames=20, interval=100)
         .replace(/₆/g, '6')
         .replace(/₇/g, '7')
         .replace(/₈/g, '8')
-        .replace(/₉/g, '9');
+        .replace(/₉/g, '9')
+        .replace(/'/g, '_p');      // O' → O_p，避免 Python 语法错误
       pointNameMapAnim[p.name] = pythonName;
       return `${pythonName} = np.array([${p.x}, ${p.y}, ${p.z}])`;
     }).join('\n');
@@ -1261,7 +1605,7 @@ ani = animation.FuncAnimation(fig, update, frames=40, interval=100, blit=True)
 
     // scatterCode保留原始名称用于显示标签
     const scatterCode = points.map(p =>
-      `ax.scatter(${p.x}, ${p.y}, ${p.z}, c='${primaryColor}', s=60, edgecolors='white', linewidths=1.5)\nax.text(${p.x}+0.1, ${p.y}+0.1, ${p.z}+0.1, '${p.name}', fontsize=11, fontweight='bold', color='${primaryColor}')`
+      `ax.scatter(${p.x}, ${p.y}, ${p.z}, c='${primaryColor}', s=60, edgecolors='white', linewidths=1.5)\nax.text(${p.x}+0.1, ${p.y}+0.1, ${p.z}+0.1, '${p.name.replace(/'/g, "\\'")}', fontsize=11, fontweight='bold', color='${primaryColor}')`
     ).join('\n');
 
     return '```python\nimport matplotlib.pyplot as plt\nfrom mpl_toolkits.mplot3d import Axes3D\nimport matplotlib.animation as animation\nimport numpy as np\n\nplt.rcParams[\'font.sans-serif\'] = [\'SimHei\', \'DejaVu Sans\']\nplt.rcParams[\'axes.unicode_minus\'] = False\n\nfig = plt.figure(figsize=(12, 8), facecolor=\'white\')\nax = fig.add_subplot(111, projection=\'3d\')\nax.set_facecolor(\'#fafafa\')\n\n# 定义点坐标（使用Python兼容的变量名）\n' + pointCodeAnim + '\n\n# 绘制基础线条\n' + linePlotCode + '\n# 绘制点\n' + scatterCode + '\n\nax.set_title(\'' + title + '\', fontsize=16, fontweight=\'bold\', pad=20, color=\'#1a237e\')\nax.set_xlabel(\'X\', fontsize=12, fontweight=\'bold\')\nax.set_ylabel(\'Y\', fontsize=12, fontweight=\'bold\')\nax.set_zlabel(\'Z\', fontsize=12, fontweight=\'bold\')\nax.set_xlim(-1, 4)\nax.set_ylim(-1, 4)\nax.set_zlim(-1, 3)\nax.grid(True, linestyle=\':\', alpha=0.4)\n\n' + animCode + '\n\nplt.tight_layout()\nani.save(\'/tmp/animation.gif\', writer=\'pillow\', fps=20, dpi=100)\nprint("Done")\n```';
@@ -1409,6 +1753,13 @@ ani = animation.FuncAnimation(fig, update, frames=40, interval=100, blit=True)
     ];
     const result = await this.callLLMChat(responseMessages, systemPrompt);
     return result.trim().replace(/["""'']/g, '');
+  }
+
+  // ==================== Python字符串转义 ====================
+  static escapePythonString(str) {
+    if (!str) return '';
+    // 反斜杠必须最先处理
+    return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   }
 
   static getTemplates() {
