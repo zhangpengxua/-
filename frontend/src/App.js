@@ -1,4 +1,4 @@
-import { useState, useEffect, useContext } from 'react';
+import { useState, useEffect, useContext, useRef } from 'react';
 import axios from 'axios';
 import { ThemeContext } from './theme';
 import Sidebar from './components/Sidebar';
@@ -107,6 +107,7 @@ function App() {
   const [ocrResult, setOcrResult] = useState(null);
   const [healthCheck, setHealthCheck] = useState(null); // null = loading, object = result
   const [showSetupGuide, setShowSetupGuide] = useState(false);
+  const activeRequestRef = useRef(null);
 
   useEffect(() => {
     // 启动时检测环境
@@ -238,10 +239,15 @@ function App() {
         ? `${text || ocrTextOverride}\n\n图片识别文字: ${ocrTextOverride}`
         : text;
 
+      const controller = new AbortController();
+      activeRequestRef.current = controller;
+
       const response = await axios.post(`${API_BASE_URL}/conversations/${targetConv._id}/message`, {
         content: requestContent,
         imageBase64: ocrTextOverride ? imageData?.split(',')[1] : (imageData ? imageData.split(',')[1] : null),
-      });
+      }, { signal: controller.signal });
+
+      if (response.data.aborted) return;
 
       setCurrentConversation(response.data.conversation);
       setConversations(prev =>
@@ -250,9 +256,11 @@ function App() {
         )
       );
     } catch (error) {
+      if (axios.isCancel?.(error) || error.code === 'ERR_CANCELED') return;
       console.error('Failed to send message:', error);
       console.error('Error response:', error.response?.data);
     } finally {
+      activeRequestRef.current = null;
       setLoadingConvId(null);
     }
   };
@@ -269,15 +277,13 @@ function App() {
 
   // Fix 5: Stop the current generation
   const handleStop = async () => {
-    if (!currentConversation) return;
+    if (!currentConversation || !loadingConvId) return;
     try {
-      await axios.delete(`${API_BASE_URL}/conversations/${currentConversation._id}`);
-      setConversations(prev => prev.filter(c => c._id !== currentConversation._id));
-      const remaining = conversations.filter(c => c._id !== currentConversation._id);
-      setCurrentConversation(remaining.length > 0 ? remaining[0] : null);
+      await axios.post(`${API_BASE_URL}/conversations/${currentConversation._id}/abort`);
     } catch (e) {
-      console.error('Stop failed:', e);
+      console.error('Abort failed:', e);
     }
+    activeRequestRef.current?.abort();
     setLoadingConvId(null);
   };
 
@@ -327,18 +333,28 @@ function App() {
         ? `${edited.trim()}\n\n图片识别文字: ${lastUserMsg.ocrText}`
         : edited.trim();
 
+      const controller = new AbortController();
+      activeRequestRef.current = controller;
+
       axios.post(`${API_BASE_URL}/conversations/${currentConversation._id}/message`, {
         content: requestContent,
         imageBase64: origImageBase64,
-      })
+      }, { signal: controller.signal })
         .then(response => {
+          if (response.data.aborted) return;
           setCurrentConversation(response.data.conversation);
           setConversations(prev =>
             prev.map(c => c._id === response.data.conversation._id ? response.data.conversation : c)
           );
         })
-        .catch(err => { console.error('Failed to send edited message:', err); })
-        .finally(() => { setLoadingConvId(null); });
+        .catch(err => {
+          if (axios.isCancel?.(err) || err.code === 'ERR_CANCELED') return;
+          console.error('Failed to send edited message:', err);
+        })
+        .finally(() => {
+          activeRequestRef.current = null;
+          setLoadingConvId(null);
+        });
     }
   };
 

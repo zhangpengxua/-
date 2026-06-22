@@ -59,9 +59,19 @@ const ChatArea = ({ messages = [], isLoading, formatDate, onEditLastMessage }) =
           imageType: stepResult?.imageType || 'MATH_STATIC_EQUATION',
           needImage: stepResult?.needImage || false,
           drawingData: stepResult?.drawingData || null,
-          isGeometry: stepResult?.imageType === 'MATH_STATIC_ABSTRACT' || stepResult?.imageType === 'MATH_DYNAMIC_GEOMETRY' || stepResult?.imageType === 'MATH_DYNAMIC_3D_GEOMETRY',
-          is2DPlot: stepResult?.imageType === 'MATH_STATIC_2D_FUNCTION',
-          isSurface: stepResult?.imageType === 'MATH_STATIC_SURFACE' || stepResult?.imageType === 'MATH_STATIC_IMPLICIT',
+          isGeometry: stepResult?.isGeometry ?? (
+            stepResult?.imageType === 'MATH_STATIC_ABSTRACT'
+            || stepResult?.imageType === 'MATH_DYNAMIC_GEOMETRY'
+            || stepResult?.imageType === 'MATH_DYNAMIC_3D_GEOMETRY'
+          ),
+          is2DPlot: stepResult?.is2DPlot ?? (
+            stepResult?.imageType === 'MATH_STATIC_2D_FUNCTION'
+            || stepResult?.imageType === 'MATH_STATIC_EQUATION'
+          ),
+          isSurface: stepResult?.isSurface ?? (
+            stepResult?.imageType === 'MATH_STATIC_SURFACE'
+            || stepResult?.imageType === 'MATH_STATIC_IMPLICIT'
+          ),
         });
       });
     } else {
@@ -215,7 +225,7 @@ const ChatArea = ({ messages = [], isLoading, formatDate, onEditLastMessage }) =
                 <div style={{ marginBottom: theme.spacing.sm, textAlign: 'center' }}>
                   <FunctionPlot drawingData={part.drawingData} width={600} height={400} />
                 </div>
-              ) : (part.isGeometry || part.isSurface) ? (
+              ) : (part.isGeometry || part.isSurface || (part.drawingData && part.imageType !== 'NO_IMAGE' && !part.is2DPlot)) ? (
                 <div style={{ marginBottom: theme.spacing.sm, textAlign: 'center' }}>
                   <Interactive3DViewer description={part.description} drawingData={part.drawingData} imageType={part.imageType} />
                 </div>

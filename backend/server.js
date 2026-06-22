@@ -4,7 +4,6 @@ const { execSync } = require('child_process');
 require('dotenv').config();
 
 const conversationRoutes = require('./routes/conversations');
-const pythonRoutes = require('./routes/python');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -16,7 +15,6 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 app.use('/api/conversations', conversationRoutes);
-app.use('/api/python', pythonRoutes);
 
 // OCR-only endpoint
 const OCRService = require('./utils/ocrService');

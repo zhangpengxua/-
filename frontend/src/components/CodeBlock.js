@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import axios from 'axios';
 
 const copyIcon = (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -27,16 +26,8 @@ function CodeBlock({ code }) {
 
   const handleExecute = async () => {
     setIsRunning(true);
-    try {
-      const response = await axios.post('http://localhost:5000/api/python/execute', {
-        code: code
-      });
-      setOutput(response.data);
-    } catch (error) {
-      setOutput({ success: false, error: error.message });
-    } finally {
-      setIsRunning(false);
-    }
+    setOutput({ success: false, error: 'Python 在线执行已移除，图形由前端 mathjs 引擎渲染。' });
+    setIsRunning(false);
   };
 
   const handleCopy = async () => {

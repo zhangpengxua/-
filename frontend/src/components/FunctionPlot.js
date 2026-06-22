@@ -1,30 +1,23 @@
 import React, { useRef, useEffect, useCallback } from 'react';
 import { create, all } from 'mathjs';
+import { latexToMathJS } from '../utils/latexToMathJS';
 
 const math = create(all, {});
 
-// 解析函数表达式，支持多种格式
-function parseFunctionExpr(expr) {
-  if (!expr) return { expr: 'x', type: 'explicit' };
-  // 处理 z = f(x,y) 格式
-  const zMatch = expr.match(/^z\s*=\s*(.+?)$/);
-  if (zMatch) return { expr: zMatch[1], type: 'explicit', vars: ['x', 'y'] };
-  // 处理 y = f(x) 格式
-  const yMatch = expr.match(/^y\s*=\s*(.+?)$/);
-  if (yMatch) return { expr: yMatch[1], type: 'explicit', vars: ['x'] };
-  // 处理 f(x) = ... 格式
-  const fMatch = expr.match(/^f\(x\)\s*=\s*(.+?)$/);
-  if (fMatch) return { expr: fMatch[1], type: 'explicit', vars: ['x'] };
-  return { expr, type: 'explicit', vars: ['x'] };
+/** 解析函数表达式，自动处理 LaTeX 和纯数学表达式 */
+function parseAndCompile(expr) {
+  if (!expr) return null;
+  return compileExpr(latexToMathJS(String(expr)));
 }
 
-// 预编译表达式以提高性能
+/** 预编译表达式以提高性能 */
 function compileExpr(expr) {
   try {
     const parsed = math.parse(expr);
     const compiled = parsed.compile();
     return (vars) => compiled.evaluate(vars);
   } catch (e) {
+    console.warn('[FunctionPlot] compileExpr 失败:', expr, e.message);
     return null;
   }
 }
@@ -123,8 +116,7 @@ const FunctionPlot = React.memo(({ drawingData, width = 600, height = 400 }) => 
     ctx.clip();
 
     funcs.forEach((func, idx) => {
-      const parsed = parseFunctionExpr(func.expr);
-      const compiled = compileExpr(parsed.expr);
+      const compiled = parseAndCompile(func.expr);
       if (!compiled) return;
 
       const color = func.color || colors[idx % colors.length];

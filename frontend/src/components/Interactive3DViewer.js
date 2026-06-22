@@ -3,15 +3,22 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Line, Text } from '@react-three/drei';
 import * as THREE from 'three';
 import { create, all } from 'mathjs';
+import { latexToMathJS } from '../utils/latexToMathJS';
 
 const math = create(all, {});
 
 // ============ 数值计算工具 ============
 
-/** 编译数学表达式为可调用函数 */
-function compileExpr(expr, vars) {
+/** 编译数学表达式为可调用函数，自动处理 LaTeX */
+function compileExpr(expr) {
   try {
-    const parsed = math.parse(expr);
+    let cleanExpr = latexToMathJS(String(expr));
+    // 含等号的方程（如 x^2+y^2=4）须重排为 f(x,y,z)=0 形式，否则 mathjs 无法解析
+    if (cleanExpr.includes('=')) {
+      const rearranged = rearrangeToImplicitForm(cleanExpr);
+      if (rearranged) cleanExpr = rearranged;
+    }
+    const parsed = math.parse(cleanExpr);
     const compiled = parsed.compile();
     return (scope) => compiled.evaluate(scope);
   } catch (e) {
@@ -24,15 +31,17 @@ function compileExpr(expr, vars) {
 function extractSurfaceInfo(description, drawingData, imageType) {
   const info = { type: 'unknown', equation: '', xRange: [-3, 3], yRange: [-3, 3], zRange: [-3, 3], resolution: 40 };
 
-  // 1. 如果 drawingData 有 functions，尝试提取
+  // 1. 如果 drawingData 有 functions，提取第一个函数作为主曲面
   if (drawingData?.functions?.length > 0) {
-    for (const f of drawingData.functions) {
-      const expr = f.expr || f.equation || '';
-      if (expr.includes('z') || expr.includes('=')) {
-        info.equation = expr;
-        break;
-      }
-    }
+    const f = drawingData.functions[0];
+    info.equation = f.expr || f.equation || '';
+    info.type = f.type || (imageType === 'MATH_STATIC_IMPLICIT' ? 'implicit' : 'explicit');
+    if (f.xRange) info.xRange = f.xRange;
+    if (f.yRange) info.yRange = f.yRange;
+    if (f.zRange) info.zRange = f.zRange;
+    if (f.resolution) info.resolution = f.resolution;
+    if (f.color) info.color = f.color;
+    if (f.opacity != null) info.opacity = f.opacity;
   }
 
   // 2. 如果 drawingData 有 surfaceEquation
@@ -65,13 +74,14 @@ function extractSurfaceInfo(description, drawingData, imageType) {
   // 6. 参数曲面数据（从 drawingData.functions）
   if (drawingData?.functions?.length > 0) {
     for (const f of drawingData.functions) {
-      if (f.type === 'parametric' && f.exprU && f.exprV) {
+      const p = getParametricExprs(f);
+      if (p.exprU && p.exprV) {
         info.type = 'parametric';
-        info.exprU = f.exprU;
-        info.exprV = f.exprV;
-        info.exprW = f.exprW || '';
-        info.paramU = f.paramU || ['u', 0, Math.PI * 2];
-        info.paramV = f.paramV || ['v', 0, Math.PI * 2];
+        info.exprU = p.exprU;
+        info.exprV = p.exprV;
+        info.exprW = p.exprW;
+        info.paramU = p.paramU || ['u', 0, Math.PI * 2];
+        info.paramV = p.paramV || ['v', 0, 1];
         info.color = f.color || '#4d96ff';
         info.opacity = f.opacity != null ? f.opacity : 0.7;
         break;
@@ -152,6 +162,261 @@ function detectPlane(eq) {
   }
 
   return null;
+}
+
+/** 解析圆盘边界方程 x^2+y^2=R */
+function parseDiskRadius(eq) {
+  if (!eq || typeof eq !== 'string') return null;
+  const clean = eq.replace(/\s/g, '');
+  const m = clean.match(/^x(?:\*\*|\^)2\+y(?:\*\*|\^)2=(-?\d+(?:\.\d+)?)$/);
+  if (m) return Math.sqrt(parseFloat(m[1]));
+  return null;
+}
+
+/** 从 equation 解析平面参数（flat / disk / implicit） */
+function parsePlaneFromEquation(equation) {
+  if (!equation || typeof equation !== 'string') return null;
+  const clean = equation.replace(/\s/g, '');
+
+  const diskR = parseDiskRadius(clean);
+  if (diskR != null) {
+    return { kind: 'disk', radius: diskR, normal: [0, 0, 1], point: [0, 0, 0] };
+  }
+
+  const flat = detectPlane(clean);
+  if (flat) {
+    const { a, b, c, d } = flat;
+    let px = 0, py = 0, pz = 0;
+    if (Math.abs(c) > 1e-10) pz = d / c;
+    else if (Math.abs(b) > 1e-10) py = d / b;
+    else if (Math.abs(a) > 1e-10) px = d / a;
+    return { kind: 'flat', normal: [a, b, c], point: [px, py, pz] };
+  }
+
+  if (clean.includes('=')) {
+    return { kind: 'implicit', equation };
+  }
+  return null;
+}
+
+/** 合并 plane 条目上的各种字段，得到可渲染数据 */
+function resolvePlaneRenderData(pl, pointLookup, defSize) {
+  let { normal, point, bounds, equation, radius, opacity, color } = pl;
+  const xRange = pl.xRange || [-defSize, defSize];
+  const yRange = pl.yRange || [-defSize, defSize];
+  const zRange = pl.zRange || [-defSize, defSize];
+
+  if ((!normal || !point) && pl.points && pl.points.length >= 3) {
+    const pNames = pl.points.slice(0, 3);
+    const pts = pNames.map(n => pointLookup[n]).filter(Boolean);
+    if (pts.length === 3) {
+      const p1 = new THREE.Vector3(pts[0].x, pts[0].z, -pts[0].y);
+      const p2 = new THREE.Vector3(pts[1].x, pts[1].z, -pts[1].y);
+      const p3 = new THREE.Vector3(pts[2].x, pts[2].z, -pts[2].y);
+      const ab = new THREE.Vector3().copy(p2).sub(p1);
+      const ac = new THREE.Vector3().copy(p3).sub(p1);
+      const n = new THREE.Vector3().crossVectors(ab, ac).normalize();
+      normal = [pl.normal?.[0] ?? n.x, pl.normal?.[1] ?? n.z, pl.normal?.[2] ?? -n.y];
+      point = [pts[0].x, pts[0].y, pts[0].z];
+    }
+  }
+
+  if (pl.boundary && !radius) {
+    const r = parseDiskRadius(pl.boundary);
+    if (r != null) radius = r;
+  }
+
+  if (equation && (!normal || !point)) {
+    const parsed = parsePlaneFromEquation(equation);
+    if (parsed) {
+      if (parsed.kind === 'implicit') {
+        return { kind: 'implicit', equation: parsed.equation, xRange, yRange, zRange, color, opacity };
+      }
+      normal = normal || parsed.normal;
+      point = point || parsed.point;
+      if (parsed.kind === 'disk' && !radius) radius = parsed.radius;
+    }
+  }
+
+  if (!normal || !point) {
+    console.warn('[ThreePlanes] 无法解析平面:', pl);
+    return null;
+  }
+
+  const finalBounds = bounds || [[-defSize, defSize], [-defSize, defSize]];
+  const isDisk = pl.type === 'disk' || radius > 0;
+
+  if (isDisk) {
+    if (!radius) {
+      const [uMin, uMax] = finalBounds[0];
+      const [vMin, vMax] = finalBounds[1];
+      radius = Math.max(uMax - uMin, vMax - vMin) / 2;
+    }
+    return { kind: 'disk', normal, point, radius, color, opacity };
+  }
+
+  return { kind: 'flat', normal, point, bounds: finalBounds, color, opacity };
+}
+
+/**
+ * 将隐式方程重排为 f(x,y,z) 形式（用于数值计算）
+ * 使用函数计算方式：检测 = 号，将 left=right 重排为 left-(right)
+ * 例如: "x^2+y^2+z^2=4" → "x^2+y^2+z^2-(4)"
+ *       "x^2+y^2+z^2-4=0" → "x^2+y^2+z^2-4"
+ */
+function rearrangeToImplicitForm(equation) {
+  if (!equation) return null;
+  const s = equation.trim();
+  // 找到最外层的 =（不在括号内的）
+  let depth = 0;
+  let eqPos = -1;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '(' || s[i] === '{' || s[i] === '[') depth++;
+    else if (s[i] === ')' || s[i] === '}' || s[i] === ']') depth--;
+    else if (s[i] === '=' && depth === 0) {
+      eqPos = i;
+      break;
+    }
+  }
+  if (eqPos < 0) return null;
+
+  const left = s.slice(0, eqPos).trim();
+  const right = s.slice(eqPos + 1).trim();
+
+  // 如果 right 是 "0"，直接返回 left
+  if (right === '0') return left;
+
+  // 否则：left - (right)
+  return left + ' - (' + right + ')';
+}
+
+/** 从 z=f(x,y) 形式提取右侧表达式 */
+function extractExplicitZExpr(equation) {
+  if (!equation) return equation;
+  const m = String(equation).trim().match(/^z\s*=\s*(.+)$/i);
+  return m ? m[1].trim() : equation;
+}
+
+/** 解析参数范围 [name, min, max] */
+function parseParamRange(param, defName, defMin, defMax) {
+  if (!Array.isArray(param) || param.length < 3) return [defName, defMin, defMax];
+  return [String(param[0]), Number(param[1]), Number(param[2])];
+}
+
+/** 获取参数曲面三分量（兼容多种字段名） */
+function getParametricExprs(func) {
+  return {
+    exprU: func.exprU || func.exprX || func.x || '',
+    exprV: func.exprV || func.exprY || func.y || '',
+    exprW: func.exprW || func.exprZ || func.z || '0',
+    paramU: func.paramU || func.uRange,
+    paramV: func.paramV || func.vRange,
+  };
+}
+
+/** 自动判断函数渲染类型（不依赖 LLM 严格填写 type） */
+function resolveFunctionType(func) {
+  const { exprU, exprV } = getParametricExprs(func);
+  if (exprU && exprV) return 'parametric';
+
+  const type = String(func.type || '').toLowerCase();
+  const expr = (func.expr || func.equation || '').trim();
+  if (/parametric|参数/.test(type)) return 'parametric';
+  if (/implicit|隐式|隐/.test(type)) return 'implicit';
+  if (/explicit|显式|显/.test(type)) return 'explicit';
+  // 含等号且不是 z=... → 隐式
+  if (/=/.test(expr) && !/^z\s*=/i.test(expr)) return 'implicit';
+  return 'explicit';
+}
+
+/** 沿 z 轴扫描，求隐式曲面 f(x,y,z)=0 与竖直线的交点（用于网格化） */
+function findZOnSurface(compiled, x, y, zMin, zMax, steps = 80) {
+  let prevF = null;
+  let prevZ = null;
+  const roots = [];
+
+  for (let k = 0; k <= steps; k++) {
+    const z = zMin + (zMax - zMin) * k / steps;
+    let f;
+    try {
+      f = compiled({ x, y, z });
+    } catch {
+      continue;
+    }
+    if (typeof f !== 'number' || !isFinite(f)) continue;
+    if (Math.abs(f) < 0.12) roots.push(z);
+    if (prevF !== null && prevF * f <= 0) {
+      const denom = Math.abs(prevF) + Math.abs(f);
+      if (denom > 1e-12) {
+        roots.push(prevZ + (Math.abs(prevF) / denom) * (z - prevZ));
+      }
+    }
+    prevF = f;
+    prevZ = z;
+  }
+
+  if (roots.length === 0) return null;
+  // 多根时取最接近区间中点的那个（避免随机跳面）
+  const mid = (zMin + zMax) / 2;
+  roots.sort((a, b) => Math.abs(a - mid) - Math.abs(b - mid));
+  return roots[0];
+}
+
+/** 由隐式方程生成三角网格（逐列求 z） */
+function buildImplicitMesh(compiled, xRange, yRange, zRange, resolution) {
+  const [xMin, xMax] = xRange || [-3, 3];
+  const [yMin, yMax] = yRange || [-3, 3];
+  const [zMin, zMax] = zRange || [-3, 3];
+  const res = Math.max(12, Math.min(60, resolution));
+
+  const stepX = (xMax - xMin) / res;
+  const stepY = (yMax - yMin) / res;
+  const zGrid = [];
+
+  for (let j = 0; j <= res; j++) {
+    const row = [];
+    for (let i = 0; i <= res; i++) {
+      const x = xMin + i * stepX;
+      const y = yMin + j * stepY;
+      row.push(findZOnSurface(compiled, x, y, zMin, zMax, res * 2));
+    }
+    zGrid.push(row);
+  }
+
+  const vertices = [];
+  const indices = [];
+  const idx = (i, j) => j * (res + 1) + i;
+  const vertIndex = Array.from({ length: res + 1 }, () => Array(res + 1).fill(-1));
+
+  for (let j = 0; j <= res; j++) {
+    for (let i = 0; i <= res; i++) {
+      const z = zGrid[j][i];
+      if (z === null) continue;
+      const x = xMin + i * stepX;
+      const y = yMin + j * stepY;
+      vertIndex[j][i] = vertices.length / 3;
+      vertices.push(x, z, -y);
+    }
+  }
+
+  for (let j = 0; j < res; j++) {
+    for (let i = 0; i < res; i++) {
+      const a = vertIndex[j][i];
+      const b = vertIndex[j][i + 1];
+      const c = vertIndex[j + 1][i];
+      const d = vertIndex[j + 1][i + 1];
+      if (a < 0 || b < 0 || c < 0 || d < 0) continue;
+      indices.push(a, b, c);
+      indices.push(b, d, c);
+    }
+  }
+
+  if (vertices.length < 9) return null;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
 }
 
 // ============ 原始几何体 (点线) ============
@@ -339,15 +604,10 @@ function ThreeGeometry({ geoData }) {
 }
 
 /** 显式曲面 z = f(x,y) — 用 mathjs 数值计算生成网格 */
-function ExplicitSurface({ equation, xRange, yRange, resolution = 40 }) {
+function ExplicitSurface({ equation, xRange, yRange, resolution = 40, color = '#4d96ff', opacity = 0.75 }) {
   const meshRef = useRef();
-
-  // 标准化方程：去掉 "z = " 前缀
-  let expr = equation.replace(/^z\s*=\s*/i, '').trim();
-  // 转换 ^ 为 **
-  expr = expr.replace(/\^/g, '**');
-
-  const compiled = useMemo(() => compileExpr(expr, ['x', 'y']), [expr]);
+  const zExpr = extractExplicitZExpr(equation);
+  const compiled = useMemo(() => compileExpr(zExpr), [zExpr]);
 
   const geometry = useMemo(() => {
     if (!compiled) return null;
@@ -397,15 +657,22 @@ function ExplicitSurface({ equation, xRange, yRange, resolution = 40 }) {
     return geo;
   }, [compiled, xRange, yRange, resolution]);
 
+  if (!compiled) {
+    return (
+      <Text position={[0, 0, 0]} fontSize={0.4} color="#ff6b6b">
+        无法编译显式曲面: {String(equation).slice(0, 40)}
+      </Text>
+    );
+  }
   if (!geometry) return null;
 
   return (
     <mesh ref={meshRef} geometry={geometry}>
       <meshStandardMaterial
-        color="#4d96ff"
+        color={color}
         side={THREE.DoubleSide}
         transparent
-        opacity={0.75}
+        opacity={opacity}
         wireframe={false}
         roughness={0.3}
         metalness={0.1}
@@ -416,13 +683,32 @@ function ExplicitSurface({ equation, xRange, yRange, resolution = 40 }) {
 
 /** 隐式曲面 — 检测球面等已知模式，用 mathjs 数值采样 */
 function ImplicitSurface({ equation, xRange, yRange, zRange, resolution = 30 }) {
-  // 标准化方程
-  let eq = equation.replace(/\s/g, '');
-  // 转换 ^ 为 **
-  eq = eq.replace(/\^/g, '**');
+  const eq = useMemo(() => equation.replace(/\s/g, ''), [equation]);
+  const sphere = useMemo(() => detectSphere(eq), [eq]);
+  const cylinder = useMemo(() => detectCylinder(eq), [eq]);
+  const plane = useMemo(() => detectPlane(eq), [eq]);
 
-  // 尝试检测球面
-  const sphere = detectSphere(eq);
+  const points = useMemo(() => {
+    if (sphere || cylinder || plane) return null;
+
+    let expr = rearrangeToImplicitForm(equation);
+    if (!expr) {
+      expr = eq.replace(/=\s*0\s*$/, '').replace(/==\s*0\s*$/, '');
+      if (!expr.trim()) expr = eq;
+    }
+
+    const compiled = compileExpr(expr);
+    if (!compiled) return null;
+
+    return buildImplicitMesh(
+      compiled,
+      xRange || [-3, 3],
+      yRange || [-3, 3],
+      zRange || [-3, 3],
+      resolution
+    );
+  }, [sphere, cylinder, plane, eq, equation, xRange, yRange, zRange, resolution]);
+
   if (sphere) {
     const r = sphere.r;
     return (
@@ -440,14 +726,11 @@ function ImplicitSurface({ equation, xRange, yRange, zRange, resolution = 30 }) 
     );
   }
 
-  // 尝试检测圆柱面
-  const cylinder = detectCylinder(eq);
   if (cylinder) {
     const { axis, radius } = cylinder;
     const [xMin, xMax] = xRange || [-3, 3];
     const [yMin, yMax] = yRange || [-3, 3];
     const [zMin, zMax] = zRange || [-3, 3];
-    // 根据轴线方向确定高度
     let height, rotation;
     if (axis === 'z') {
       height = Math.max(yMax - yMin, zMax - zMin);
@@ -455,7 +738,7 @@ function ImplicitSurface({ equation, xRange, yRange, zRange, resolution = 30 }) 
     } else if (axis === 'y') {
       height = Math.max(xMax - xMin, zMax - zMin);
       rotation = [Math.PI / 2, 0, 0];
-    } else { // x-axis
+    } else {
       height = Math.max(yMax - yMin, zMax - zMin);
       rotation = [0, 0, Math.PI / 2];
     }
@@ -475,15 +758,12 @@ function ImplicitSurface({ equation, xRange, yRange, zRange, resolution = 30 }) 
     );
   }
 
-  // 尝试检测平面并用有边界网格渲染
-  const plane = detectPlane(eq);
   if (plane) {
     const { a, b, c, d } = plane;
     const [xMin, xMax] = xRange || [-3, 3];
     const [yMin, yMax] = yRange || [-3, 3];
     const size = Math.max(xMax - xMin, yMax - yMin);
 
-    // 取平面上一点
     let px, py, pz;
     if (Math.abs(c) > 1e-10) {
       px = 0; py = 0; pz = d / c;
@@ -506,78 +786,37 @@ function ImplicitSurface({ equation, xRange, yRange, zRange, resolution = 30 }) 
     );
   }
 
-  // 通用隐式曲面：网格采样 + 阈值过滤（简化版）
-  // 使用粒子云方式可视化
-  const points = useMemo(() => {
-    const [xMin, xMax] = xRange || [-3, 3];
-    const [yMin, yMax] = yRange || [-3, 3];
-    const [zMin, zMax] = zRange || [-3, 3];
-    const res = Math.max(10, Math.min(40, resolution));
-
-    // 构建表达式
-    let expr = eq
-      .replace(/=\s*0\s*$/, '')
-      .replace(/==\s*0\s*$/, '');
-    if (!expr.trim()) expr = eq;
-
-    // 替换 x,y,z → 变量名用于 eval
-    // 使用 mathjs compile
-    const compiled = compileExpr(expr, ['x', 'y', 'z']);
-    if (!compiled) return [];
-
-    const pts = [];
-    const stepX = (xMax - xMin) / res;
-    const stepY = (yMax - yMin) / res;
-    const stepZ = (zMax - zMin) / res;
-
-    for (let i = 0; i <= res; i++) {
-      const x = xMin + i * stepX;
-      for (let j = 0; j <= res; j++) {
-        const y = yMin + j * stepY;
-        for (let k = 0; k <= res; k++) {
-          const z = zMin + k * stepZ;
-          try {
-            const val = compiled({ x, y, z });
-            if (typeof val === 'number' && isFinite(val) && Math.abs(val) < 0.15) {
-              // 坐标系转换
-              pts.push(x, z, -y);
-            }
-          } catch (e) { /* skip */ }
-        }
-      }
-    }
-
-    return pts;
-  }, [eq, xRange, yRange, zRange, resolution]);
-
-  if (points.length === 0) {
+  if (!points) {
     return (
-      <Text position={[0, 0, 0]} fontSize={0.5} color="#ff6b6b">
-        无法渲染隐式曲面
+      <Text position={[0, 0, 0]} fontSize={0.4} color="#ff6b6b">
+        无法渲染隐式曲面: {String(equation).slice(0, 50)}
       </Text>
     );
   }
 
-  const positions = new Float32Array(points);
-  const pointGeo = new THREE.BufferGeometry();
-  pointGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-
   return (
-    <points geometry={pointGeo}>
-      <pointsMaterial size={0.08} color="#4d96ff" transparent opacity={0.7} sizeAttenuation />
-    </points>
+    <mesh geometry={points}>
+      <meshStandardMaterial
+        color="#4d96ff"
+        side={THREE.DoubleSide}
+        transparent
+        opacity={0.7}
+        roughness={0.3}
+        metalness={0.1}
+      />
+    </mesh>
   );
 }
 
 /** 参数曲面：x=f(u,v), y=g(u,v), z=h(u,v) — 用 mathjs 数值计算 */
 function ParametricSurface({ exprU, exprV, exprW, paramU, paramV, color = '#4d96ff', opacity = 0.7 }) {
-  const [uName, uMin, uMax] = paramU || ['u', 0, Math.PI * 2];
-  const [vName, vMin, vMax] = paramV || ['v', 0, Math.PI * 2];
+  const [uName, uMin, uMax] = parseParamRange(paramU, 'u', 0, Math.PI * 2);
+  const [vName, vMin, vMax] = parseParamRange(paramV, 'v', 0, 1);
   const res = 40;
 
-  const compiledU = useMemo(() => compileExpr(exprU, [uName, vName]), [exprU, uName, vName]);
-  const compiledV = useMemo(() => compileExpr(exprV, [uName, vName]), [exprV, uName, vName]);
-  const compiledW = useMemo(() => compileExpr(exprW, [uName, vName]), [exprW, uName, vName]);
+  const compiledU = useMemo(() => compileExpr(exprU), [exprU]);
+  const compiledV = useMemo(() => compileExpr(exprV), [exprV]);
+  const compiledW = useMemo(() => compileExpr(exprW), [exprW]);
 
   const geometry = useMemo(() => {
     if (!compiledU || !compiledV) return null;
@@ -626,7 +865,14 @@ function ParametricSurface({ exprU, exprV, exprW, paramU, paramV, color = '#4d96
     return geo;
   }, [compiledU, compiledV, compiledW, uMin, uMax, vMin, vMax]);
 
-  if (!geometry) return null;
+  if (!geometry) {
+    console.warn('[ParametricSurface] 编译失败:', { exprU, exprV, exprW });
+    return (
+      <Text position={[0, 0, 0]} fontSize={0.4} color="#ff6b6b">
+        无法渲染参数曲面
+      </Text>
+    );
+  }
 
   return (
     <mesh geometry={geometry}>
@@ -736,41 +982,185 @@ function BoundedPlaneMesh({ normal, point, bounds, idx }) {
   }, [normal, point, bounds, idx]);
 }
 
-/** 平面几何体（从 drawingData.planes）— 带边界矩形渲染，支持 points[] 或 normal+point */
+/** 圆盘面片（圆台上下底面等） */
+function BoundedDiskMesh({ normal, point, radius, idx, color, opacity = 0.35 }) {
+  const colors = ['#4d96ff', '#ff6b6b', '#6bcb77', '#ffd93d', '#ce93d8', '#ff8a65'];
+
+  const geometry = useMemo(() => {
+    if (!normal || !point || !radius) return null;
+
+    const n = new THREE.Vector3(normal[0], normal[2], -normal[1]).normalize();
+    const p = new THREE.Vector3(point[0], point[2], -point[1]);
+    const up = Math.abs(n.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    const u = new THREE.Vector3().crossVectors(n, up).normalize();
+    const v = new THREE.Vector3().crossVectors(u, n).normalize();
+
+    const segments = 48;
+    const verts = [p.x, p.y, p.z];
+    const indices = [];
+    for (let i = 0; i <= segments; i++) {
+      const t = (i / segments) * Math.PI * 2;
+      const pos = new THREE.Vector3().copy(p)
+        .add(u.clone().multiplyScalar(radius * Math.cos(t)))
+        .add(v.clone().multiplyScalar(radius * Math.sin(t)));
+      verts.push(pos.x, pos.y, pos.z);
+    }
+    for (let i = 1; i < segments; i++) {
+      indices.push(0, i, i + 1);
+    }
+    indices.push(0, segments, 1);
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return geo;
+  }, [normal, point, radius]);
+
+  if (!geometry) return null;
+  const matColor = color || colors[(idx || 0) % colors.length];
+
+  return (
+    <mesh geometry={geometry}>
+      <meshStandardMaterial
+        color={matColor}
+        transparent
+        opacity={opacity}
+        side={THREE.DoubleSide}
+        roughness={0.4}
+        metalness={0.05}
+        depthWrite={false}
+      />
+    </mesh>
+  );
+}
+
+/** 单个平面/曲面条目渲染 */
+function PlaneEntry({ pl, idx, pointLookup, defSize }) {
+  const resolved = resolvePlaneRenderData(pl, pointLookup, defSize);
+  if (!resolved) return null;
+
+  if (resolved.kind === 'implicit') {
+    return (
+      <ImplicitSurface
+        key={idx}
+        equation={resolved.equation}
+        xRange={resolved.xRange}
+        yRange={resolved.yRange}
+        zRange={resolved.zRange}
+        resolution={pl.resolution || 30}
+      />
+    );
+  }
+  if (resolved.kind === 'disk') {
+    return (
+      <BoundedDiskMesh
+        key={idx}
+        normal={resolved.normal}
+        point={resolved.point}
+        radius={resolved.radius}
+        idx={idx}
+        color={resolved.color || pl.color}
+        opacity={resolved.opacity ?? pl.opacity ?? 0.35}
+      />
+    );
+  }
+  return (
+    <BoundedPlaneMesh
+      key={idx}
+      normal={resolved.normal}
+      point={resolved.point}
+      bounds={resolved.bounds}
+      idx={idx}
+    />
+  );
+}
+
+/** 平面几何体（从 drawingData.planes）— 支持 equation / disk / implicit */
 function ThreePlanes({ planes, defaultBounds, pointLookup = {} }) {
   if (!planes || planes.length === 0) return null;
 
-  // 默认范围：用 xRange（若提供）或 [-4, 4]
   const defSize = (defaultBounds && Array.isArray(defaultBounds) && defaultBounds.length === 2)
     ? Math.max(Math.abs(defaultBounds[0]), Math.abs(defaultBounds[1]))
     : 4;
 
   return (
     <group>
-      {planes.map((pl, idx) => {
-        let { normal, point, bounds } = pl;
+      {planes.map((pl, idx) => (
+        <PlaneEntry key={idx} pl={pl} idx={idx} pointLookup={pointLookup} defSize={defSize} />
+      ))}
+    </group>
+  );
+}
 
-        // 如果 planes 是 {points: ["A","B","C"]} 格式，从坐标计算法向量
-        if ((!normal || !point) && pl.points && pl.points.length >= 3) {
-          const pNames = pl.points.slice(0, 3);
-          const pts = pNames.map(n => pointLookup[n]).filter(Boolean);
-          if (pts.length === 3) {
-            // math 坐标系 (X右, Y前, Z上)
-            const p1 = new THREE.Vector3(pts[0].x, pts[0].z, -pts[0].y);
-            const p2 = new THREE.Vector3(pts[1].x, pts[1].z, -pts[1].y);
-            const p3 = new THREE.Vector3(pts[2].x, pts[2].z, -pts[2].y);
-            const ab = new THREE.Vector3().copy(p2).sub(p1);
-            const ac = new THREE.Vector3().copy(p3).sub(p1);
-            const n = new THREE.Vector3().crossVectors(ab, ac).normalize();
-            normal = [pl.normal?.[0] ?? n.x, pl.normal?.[1] ?? n.z, pl.normal?.[2] ?? -n.y];
-            point = [pts[0].x, pts[0].y, pts[0].z];
+/** 渲染 drawingData.functions 中所有函数（显式/隐式/参数） */
+function ThreeFunctions({ functions, defaultXRange, defaultYRange, defaultZRange }) {
+  if (!functions || functions.length === 0) return null;
+
+  const colors = ['#4d96ff', '#ff6b6b', '#6bcb77', '#ffd93d', '#ce93d8', '#ff8a65'];
+
+  return (
+    <group>
+      {functions.map((func, idx) => {
+        const resolvedType = resolveFunctionType(func);
+        const expr = func.expr || func.equation || '';
+        const xRange = func.xRange || defaultXRange || [-3, 3];
+        const yRange = func.yRange || defaultYRange || [-3, 3];
+        const zRange = func.zRange || defaultZRange || [-3, 3];
+        const color = func.color || colors[idx % colors.length];
+        const opacity = func.opacity != null ? func.opacity : 0.7;
+        const resolution = func.resolution || 40;
+
+        // 参数曲面：有 exprU+exprV 即渲染（不依赖 type 字段是否准确）
+        if (resolvedType === 'parametric') {
+          const p = getParametricExprs(func);
+          if (!p.exprU || !p.exprV) {
+            console.warn('[ThreeFunctions] parametric 缺少 exprU/exprV:', func);
+            return null;
           }
+          console.log('[ThreeFunctions] parametric', func.name || idx, p.exprU?.slice(0, 40));
+          return (
+            <ParametricSurface
+              key={idx}
+              exprU={p.exprU}
+              exprV={p.exprV}
+              exprW={p.exprW}
+              paramU={p.paramU}
+              paramV={p.paramV}
+              color={color}
+              opacity={opacity}
+            />
+          );
         }
 
-        // 转换 math 坐标 → three.js 坐标
-        if (!normal || !point) return null;
-        const finalBounds = bounds || [[-defSize, defSize], [-defSize, defSize]];
-        return <BoundedPlaneMesh key={idx} normal={normal} point={point} bounds={finalBounds} idx={idx} />;
+        if (!expr) return null;
+
+        if (resolvedType === 'implicit') {
+          console.log('[ThreeFunctions] implicit', func.name || idx, expr.slice(0, 40));
+          return (
+            <ImplicitSurface
+              key={idx}
+              equation={expr}
+              xRange={xRange}
+              yRange={yRange}
+              zRange={zRange}
+              resolution={resolution}
+            />
+          );
+        }
+
+        console.log('[ThreeFunctions] explicit z=', func.name || idx, expr.slice(0, 40));
+        return (
+          <ExplicitSurface
+            key={idx}
+            equation={expr}
+            xRange={xRange}
+            yRange={yRange}
+            resolution={resolution}
+            color={color}
+            opacity={opacity}
+          />
+        );
       })}
     </group>
   );
@@ -819,9 +1209,9 @@ const Interactive3DViewer = ({ description, drawingData, imageType }) => {
   const surfaceInfo = useMemo(() => extractSurfaceInfo(description, drawingData, imageType), [description, drawingData, imageType]);
 
   const geoData = useMemo(() => {
-    if (drawingData && drawingData.points && drawingData.points.length > 0) {
+    if (drawingData && (drawingData.points?.length > 0 || drawingData.planes?.length > 0 || drawingData.functions?.length > 0)) {
       return {
-        points: drawingData.points,
+        points: drawingData.points || [],
         lines: drawingData.lines || [],
         planes: drawingData.planes || [],
         functions: drawingData.functions || [],
@@ -854,13 +1244,14 @@ const Interactive3DViewer = ({ description, drawingData, imageType }) => {
     return map;
   }, [geoData, description]);
 
-  // 判断是否是曲面/隐式类型
+  // 判断是否有任何可渲染数据
   const isSurface = imageType === 'MATH_STATIC_SURFACE' || imageType === 'MATH_STATIC_IMPLICIT';
-  const hasSurfaceEquation = surfaceInfo.equation && isSurface;
-  const isParametric = surfaceInfo.type === 'parametric' && surfaceInfo.exprU && surfaceInfo.exprV;
+  const hasFunctions = (drawingData?.functions?.length > 0) || (geoData?.functions?.length > 0);
+  const hasSurfaceEquation = surfaceInfo.equation && isSurface && !hasFunctions;
+  const isParametric = !hasFunctions && surfaceInfo.type === 'parametric' && surfaceInfo.exprU && surfaceInfo.exprV;
   const hasPlanes = (drawingData?.planes?.length > 0) || (geoData?.planes?.length > 0);
 
-  if (!hasSurfaceEquation && !isParametric && !hasPlanes && geoData.points.length < 2) {
+  if (!hasSurfaceEquation && !isParametric && !hasPlanes && !hasFunctions && geoData.points.length < 2) {
     return (
       <div style={{
         width: '100%', maxWidth: '700px', margin: '16px auto',
@@ -890,19 +1281,19 @@ const Interactive3DViewer = ({ description, drawingData, imageType }) => {
         <GridPlane />
         <Axes />
 
-        {/* 曲面渲染（mathjs 数值计算） */}
-        {hasSurfaceEquation && surfaceInfo.type === 'explicit' && (
-          <AutoRotate speed={0.003}>
+        {/* 所有 3D 元素放在同一个 AutoRotate 内，确保整体旋转（如圆台侧面+底面一起转） */}
+        <AutoRotate speed={0.003}>
+          {/* 显式曲面 */}
+          {hasSurfaceEquation && surfaceInfo.type === 'explicit' && (
             <ExplicitSurface
               equation={surfaceInfo.equation}
               xRange={surfaceInfo.xRange}
               yRange={surfaceInfo.yRange}
               resolution={surfaceInfo.resolution}
             />
-          </AutoRotate>
-        )}
-        {hasSurfaceEquation && (surfaceInfo.type === 'implicit' || surfaceInfo.type === 'unknown') && (
-          <AutoRotate speed={0.003}>
+          )}
+          {/* 隐式曲面 */}
+          {hasSurfaceEquation && (surfaceInfo.type === 'implicit' || surfaceInfo.type === 'unknown') && (
             <ImplicitSurface
               equation={surfaceInfo.equation}
               xRange={surfaceInfo.xRange}
@@ -910,12 +1301,9 @@ const Interactive3DViewer = ({ description, drawingData, imageType }) => {
               zRange={surfaceInfo.zRange}
               resolution={surfaceInfo.resolution}
             />
-          </AutoRotate>
-        )}
-
-        {/* 参数曲面渲染 */}
-        {isParametric && (
-          <AutoRotate speed={0.003}>
+          )}
+          {/* 单参数曲面 */}
+          {isParametric && (
             <ParametricSurface
               exprU={surfaceInfo.exprU}
               exprV={surfaceInfo.exprV}
@@ -925,14 +1313,19 @@ const Interactive3DViewer = ({ description, drawingData, imageType }) => {
               color={surfaceInfo.color}
               opacity={surfaceInfo.opacity}
             />
-          </AutoRotate>
-        )}
-
-        {/* 点线几何体 */}
-        <ThreeGeometry geoData={geoData} />
-
-        {/* 平面 */}
-        <ThreePlanes planes={drawingData?.planes || geoData?.planes} defaultBounds={surfaceInfo.xRange} pointLookup={pointLookup} />
+          )}
+          {/* 点线几何体 */}
+          <ThreeGeometry geoData={geoData} />
+          {/* 平面（底面/顶面） */}
+          <ThreePlanes planes={drawingData?.planes || geoData?.planes} defaultBounds={surfaceInfo.xRange} pointLookup={pointLookup} />
+          {/* 多函数渲染（含参数曲面） */}
+          <ThreeFunctions
+            functions={drawingData?.functions || geoData?.functions}
+            defaultXRange={surfaceInfo.xRange}
+            defaultYRange={surfaceInfo.yRange}
+            defaultZRange={surfaceInfo.zRange}
+          />
+        </AutoRotate>
 
         <OrbitControls enableDamping dampingFactor={0.1} minDistance={2} maxDistance={30} target={[0, 0, 0]} />
       </Canvas>
@@ -942,7 +1335,7 @@ const Interactive3DViewer = ({ description, drawingData, imageType }) => {
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       }}>
         <span>Drag to rotate | Scroll to zoom | Right-drag to pan</span>
-        {hasSurfaceEquation && <span style={{ color: '#4d96ff', fontSize: '11px' }}>Numerical rendering</span>}
+        {(hasSurfaceEquation || hasFunctions) && <span style={{ color: '#4d96ff', fontSize: '11px' }}>Numerical rendering (mathjs)</span>}
       </div>
     </div>
   );

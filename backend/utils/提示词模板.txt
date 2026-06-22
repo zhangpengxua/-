@@ -25,22 +25,40 @@
 - 2D函数曲线(y=f(x)) → MATH_STATIC_2D_FUNCTION
 - 3D曲面(z=f(x,y),隐式曲面) → MATH_STATIC_SURFACE
 - 隐式方程 → MATH_STATIC_IMPLICIT
-- 3D几何体(棱柱/棱锥等) → MATH_STATIC_ABSTRACT
+- 3D几何体(棱柱/棱锥/圆台等) → MATH_STATIC_ABSTRACT
 - 一般方程/坐标系 → MATH_STATIC_EQUATION
 - 动画/动点轨迹 → MATH_DYNAMIC_GEOMETRY
 - 3D动画/旋转 → MATH_DYNAMIC_3D_GEOMETRY
 
-## drawingData 输出格式（支持点线面+函数式+隐式显式+2D3D+动静图）
+## ⚠️ 立体几何外表面（LLM 必须完整输出，前端不自动补面）
+
+### drawingData 结构
 ```
 {
-  "dimension": "2D" | "3D",
-  "type": "static" | "dynamic",
+  "dimension": "3D",
+  "type": "static",
   "points": [{"name":"A","x":0,"y":0,"z":0}],
   "lines": [["A","B"]],
-  "planes": [{"normal":[1,0,0],"point":[0,0,0],"equation":"x=0"}],
-  "functions": [{"expr":"z=x^2+y^2","type":"explicit","xRange":[-5,5],"yRange":[-5,5]}]
+  "planes": [ ... 平面外表面 ... ],
+  "functions": [ ... 曲面外表面 ... ]
 }
 ```
+
+### planes 每项必填
+- name, type("flat"|"disk"), equation, normal, point, bounds
+- 圆盘面额外必填: radius, boundary（如 x^2+y^2=4）
+
+### 圆台模板（R=下底半径, r=上底半径, h=高）
+planes:
+- 下底: {"type":"disk","equation":"z=0","boundary":"x^2+y^2=R^2","normal":[0,0,1],"point":[0,0,0],"radius":R,"bounds":[[-R,R],[-R,R]]}
+- 上底: {"type":"disk","equation":"z=h","boundary":"x^2+y^2=r^2","normal":[0,0,1],"point":[0,0,h],"radius":r,"bounds":[[-r,r],[-r,r]]}
+functions:
+- 侧面: {"type":"parametric","exprU":"(R*(1-v)+r*v)*cos(u)","exprV":"(R*(1-v)+r*v)*sin(u)","exprW":"h*v","paramU":["u",0,6.283],"paramV":["v",0,1]}
+
+### 禁止
+- 只输出 points/lines，planes 为空
+- 圆台面缺少 radius/bounds/normal/point
+- 圆台侧面放进 planes（应放 functions）
 
 ## 常量池
 - Formula_1: u = e^{xy^2} + ln(x+y+z^2) [多元超越, 3D]
