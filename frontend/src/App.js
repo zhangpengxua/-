@@ -104,6 +104,7 @@ function App() {
   const [conversations, setConversations] = useState([]);
   const [currentConversation, setCurrentConversation] = useState(null);
   const [loadingConvId, setLoadingConvId] = useState(null);
+  const [thinkingState, setThinkingState] = useState(null);
   const [ocrResult, setOcrResult] = useState(null);
   const [healthCheck, setHealthCheck] = useState(null); // null = loading, object = result
   const [showSetupGuide, setShowSetupGuide] = useState(false);
@@ -233,32 +234,119 @@ function App() {
 
     setOcrResult(null);
     setLoadingConvId(targetConv._id);
+    // 初始化 AI 思考状态
+    setThinkingState({
+      phase: 'thinking',
+      message: '开始分析题目...',
+      steps: { problemAnalysis: '' },
+      currentStepIndex: undefined,
+      layer1Steps: [],
+      functionPoolUsed: false,
+    });
 
     try {
       const requestContent = ocrTextOverride
         ? `${text || ocrTextOverride}\n\n图片识别文字: ${ocrTextOverride}`
         : text;
 
-      const controller = new AbortController();
-      activeRequestRef.current = controller;
+      // 使用 SSE 流式接口（支持 AI 思考过程实时展示）
+      try {
+        const controller = new AbortController();
+        activeRequestRef.current = controller;
 
-      const response = await axios.post(`${API_BASE_URL}/conversations/${targetConv._id}/message`, {
-        content: requestContent,
-        imageBase64: ocrTextOverride ? imageData?.split(',')[1] : (imageData ? imageData.split(',')[1] : null),
-      }, { signal: controller.signal });
+        const response = await fetch(`${API_BASE_URL}/conversations/${targetConv._id}/message-stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: requestContent,
+            imageBase64: ocrTextOverride ? imageData?.split(',')[1] : (imageData ? imageData.split(',')[1] : null),
+          }),
+          signal: controller.signal,
+        });
 
-      if (response.data.aborted) return;
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-      setCurrentConversation(response.data.conversation);
-      setConversations(prev =>
-        prev.map(c =>
-          c._id === response.data.conversation._id ? response.data.conversation : c
-        )
-      );
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          let eventType = '';
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              eventType = line.slice(7).trim();
+            } else if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+
+                if (eventType === 'thinking:update') {
+                  setThinkingState(prev => ({
+                    ...prev,
+                    ...data,
+                  }));
+                } else if (eventType === 'complete') {
+                  setThinkingState({ phase: 'complete', message: '处理完成', layer1Steps: data.thinkingSummary?.layer1Steps || [] });
+                  if (data.conversation) {
+                    setCurrentConversation(data.conversation);
+                    setConversations(prev =>
+                      prev.map(c =>
+                        c._id === data.conversation._id ? data.conversation : c
+                      )
+                    );
+                  }
+                } else if (eventType === 'error') {
+                  console.error('[SSE Error]', data.message);
+                  setThinkingState(prev => ({ ...prev, phase: 'error', message: data.message }));
+                }
+              } catch (parseErr) {
+                // skip malformed data lines
+              }
+            }
+          }
+        }
+
+        // SSE 流完成后，重新获取对话确保数据完整
+        const refreshConvRes = await axios.get(`${API_BASE_URL}/conversations/${targetConv._id}`);
+        if (refreshConvRes.data) {
+          setCurrentConversation(refreshConvRes.data);
+          setConversations(prev =>
+            prev.map(c => c._id === refreshConvRes.data._id ? refreshConvRes.data : c)
+          );
+        }
+      } catch (sseError) {
+        // SSE 失败时的回退方案：使用传统 REST 接口
+        if (sseError?.name === 'AbortError') return;
+        console.warn('[SSE] Fallback to traditional endpoint:', sseError.message);
+
+        const controller = new AbortController();
+        activeRequestRef.current = controller;
+
+        const response = await axios.post(`${API_BASE_URL}/conversations/${targetConv._id}/message`, {
+          content: requestContent,
+          imageBase64: ocrTextOverride ? imageData?.split(',')[1] : (imageData ? imageData.split(',')[1] : null),
+        }, { signal: controller.signal });
+
+        if (response.data.aborted) return;
+
+        setThinkingState({ phase: 'complete', message: '处理完成' });
+        setCurrentConversation(response.data.conversation);
+        setConversations(prev =>
+          prev.map(c =>
+            c._id === response.data.conversation._id ? response.data.conversation : c
+          )
+        );
+      }
     } catch (error) {
-      if (axios.isCancel?.(error) || error.code === 'ERR_CANCELED') return;
+      if (error?.name === 'AbortError') return;
       console.error('Failed to send message:', error);
-      console.error('Error response:', error.response?.data);
+      setThinkingState({ phase: 'error', message: error.message });
     } finally {
       activeRequestRef.current = null;
       setLoadingConvId(null);
@@ -285,6 +373,7 @@ function App() {
     }
     activeRequestRef.current?.abort();
     setLoadingConvId(null);
+    setThinkingState(null);
   };
 
   // Fix 6: Edit last message — delete old prompt + its answer, re-send edited prompt
@@ -454,6 +543,7 @@ function App() {
             <ChatArea
               messages={currentConversation.messages}
               isLoading={isLoading}
+              thinkingState={thinkingState}
               formatDate={formatDate}
               onEditLastMessage={handleEditLastMessage}
             />

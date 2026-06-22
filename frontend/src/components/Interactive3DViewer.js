@@ -199,6 +199,91 @@ function parsePlaneFromEquation(equation) {
   return null;
 }
 
+/**
+ * 从平面名称中提取顶点名称（如 "面ABC" → ["A","B","C"], "底面ABCD" → ["A","B","C","D"]）
+ * 完全基于数据驱动，无硬编码
+ */
+function extractPointNamesFromPlaneName(name) {
+  if (!name) return [];
+  // 匹配所有大写字母+可选后缀（'、数字等）→ 每个匹配项是一个顶点名
+  const matches = name.match(/[A-Za-z](?:'|′|″|\d)*/g);
+  return matches || [];
+}
+
+/**
+ * 对平面条目应用"三点定面"：从 points 字段或平面名称中提取顶点名，
+ * 然后在 pointLookup 中查找坐标，计算出法线、锚点和边界。
+ * 返回 { ok, points, nThree, uAxis, vAxis, bounds }
+ */
+function computePlaneFromPoints(pl, pointLookup) {
+  // 收集顶点名：优先 points 字段，其次从名称中提取
+  let pNames = [];
+  if (pl.points && pl.points.length >= 2) {
+    pNames = pl.points;
+  } else {
+    pNames = extractPointNamesFromPlaneName(pl.name);
+  }
+
+  const pts = pNames.map(n => pointLookup[n]).filter(Boolean);
+  if (pts.length < 3) return { ok: false, reason: 'not enough points', pts };
+
+  // 在 Three.js 空间找 3 个不共线的点计算法线
+  const toThree = (p) => new THREE.Vector3(p.x, p.z, -p.y);
+  const anchor3 = toThree(pts[0]);
+
+  let nThree = null;
+  for (let i = 1; i < Math.min(pts.length, 6); i++) {
+    for (let j = i + 1; j < Math.min(pts.length, 7); j++) {
+      const ab = new THREE.Vector3().copy(toThree(pts[i])).sub(anchor3);
+      const ac = new THREE.Vector3().copy(toThree(pts[j])).sub(anchor3);
+      const cross = new THREE.Vector3().crossVectors(ab, ac);
+      if (cross.length() > 1e-8) {
+        nThree = cross.normalize();
+        break;
+      }
+    }
+    if (nThree) break;
+  }
+  if (!nThree) {
+    // 所有点共线 → 基于一条边构造正交法线
+    const ab = new THREE.Vector3().copy(toThree(pts[1])).sub(anchor3);
+    const arb = Math.abs(ab.x) < 0.5 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+    nThree = new THREE.Vector3().crossVectors(ab, arb).normalize();
+  }
+
+  // 构造平面局部 u,v 坐标轴
+  const up = Math.abs(nThree.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+  const uAxis = new THREE.Vector3().crossVectors(nThree, up).normalize();
+  const vAxis = new THREE.Vector3().crossVectors(uAxis, nThree).normalize();
+
+  // 将所有点投影到 u,v 轴，计算边界并收集多边形UV
+  const polygonUV = [];
+  let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
+  for (const pt of pts) {
+    const pt3 = toThree(pt);
+    const diff = new THREE.Vector3().copy(pt3).sub(anchor3);
+    const uu = diff.dot(uAxis);
+    const vv = diff.dot(vAxis);
+    polygonUV.push([uu, vv]);
+    if (uu < uMin) uMin = uu;
+    if (uu > uMax) uMax = uu;
+    if (vv < vMin) vMin = vv;
+    if (vv > vMax) vMax = vv;
+  }
+  const uPad = Math.max((uMax - uMin) * 0.2, 0.5);
+  const vPad = Math.max((vMax - vMin) * 0.2, 0.5);
+
+  return {
+    ok: true,
+    pts,
+    nThree,
+    uAxis,
+    vAxis,
+    polygonUV,
+    bounds: [[uMin - uPad, uMax + uPad], [vMin - vPad, vMax + vPad]],
+  };
+}
+
 /** 合并 plane 条目上的各种字段，得到可渲染数据 */
 function resolvePlaneRenderData(pl, pointLookup, defSize) {
   let { normal, point, bounds, equation, radius, opacity, color } = pl;
@@ -206,19 +291,19 @@ function resolvePlaneRenderData(pl, pointLookup, defSize) {
   const yRange = pl.yRange || [-defSize, defSize];
   const zRange = pl.zRange || [-defSize, defSize];
 
-  if ((!normal || !point) && pl.points && pl.points.length >= 3) {
-    const pNames = pl.points.slice(0, 3);
-    const pts = pNames.map(n => pointLookup[n]).filter(Boolean);
-    if (pts.length === 3) {
-      const p1 = new THREE.Vector3(pts[0].x, pts[0].z, -pts[0].y);
-      const p2 = new THREE.Vector3(pts[1].x, pts[1].z, -pts[1].y);
-      const p3 = new THREE.Vector3(pts[2].x, pts[2].z, -pts[2].y);
-      const ab = new THREE.Vector3().copy(p2).sub(p1);
-      const ac = new THREE.Vector3().copy(p3).sub(p1);
-      const n = new THREE.Vector3().crossVectors(ab, ac).normalize();
-      normal = [pl.normal?.[0] ?? n.x, pl.normal?.[1] ?? n.z, pl.normal?.[2] ?? -n.y];
-      point = [pts[0].x, pts[0].y, pts[0].z];
-    }
+  // ===== 核心策略：始终尝试"三点定面" =====
+  // 从 points 字段或平面名称中提取顶点，用真实坐标计算法线 + 边界
+  // 若成功，完全覆盖 LLM 提供的 normal/point/bounds（LLM 的坐标系统可能不准）
+  let polygonUV = null;
+  const fromPoints = computePlaneFromPoints(pl, pointLookup);
+  if (fromPoints.ok) {
+    const n = fromPoints.nThree;
+    // 法线从 Three.js → backend 格式
+    // Three.js( tx, ty, tz ) = ( bx, bz, -by ) → backend( bx, by, bz ) = ( tx, -tz, ty )
+    normal = [n.x, -n.z, n.y];
+    point = [fromPoints.pts[0].x, fromPoints.pts[0].y, fromPoints.pts[0].z];
+    bounds = fromPoints.bounds;
+    polygonUV = fromPoints.polygonUV;
   }
 
   if (pl.boundary && !radius) {
@@ -255,7 +340,7 @@ function resolvePlaneRenderData(pl, pointLookup, defSize) {
     return { kind: 'disk', normal, point, radius, color, opacity };
   }
 
-  return { kind: 'flat', normal, point, bounds: finalBounds, color, opacity };
+  return { kind: 'flat', normal, point, bounds: finalBounds, polygonUV, color, opacity };
 }
 
 /**
@@ -888,8 +973,8 @@ function ParametricSurface({ exprU, exprV, exprW, paramU, paramV, color = '#4d96
   );
 }
 
-/** 生成有边界的平面网格（矩形面片 + 边缘线框） */
-function BoundedPlaneMesh({ normal, point, bounds, idx }) {
+/** 生成有边界的平面网格（矩形面片 / 多边形面片 + 边缘线框） */
+function BoundedPlaneMesh({ normal, point, bounds, polygonUV, idx }) {
   const colors = ['#4d96ff', '#ff6b6b', '#6bcb77', '#ffd93d', '#ce93d8', '#ff8a65'];
 
   return useMemo(() => {
@@ -903,61 +988,100 @@ function BoundedPlaneMesh({ normal, point, bounds, idx }) {
     const u = new THREE.Vector3().crossVectors(n, up).normalize();
     const v = new THREE.Vector3().crossVectors(u, n).normalize();
 
-    const segments = 16;
-    const [uMin, uMax] = bounds ? bounds[0] : [-4, 4];
-    const [vMin, vMax] = bounds ? bounds[1] : [-4, 4];
-    const su = (uMax - uMin) / segments;
-    const sv = (vMax - vMin) / segments;
+    const uvTo3D = (uu, vv) =>
+      new THREE.Vector3().copy(p).add(u.clone().multiplyScalar(uu)).add(v.clone().multiplyScalar(vv));
 
-    // --- 面片网格 ---
-    const verts = [];
-    const indices = [];
-    for (let j = 0; j <= segments; j++) {
-      const vv = vMin + j * sv;
-      for (let i = 0; i <= segments; i++) {
-        const uu = uMin + i * su;
-        const pos = new THREE.Vector3().copy(p).add(u.clone().multiplyScalar(uu)).add(v.clone().multiplyScalar(vv));
-        verts.push(pos.x, pos.y, pos.z);
+    let meshGeo, edgeGeo;
+
+    if (polygonUV && polygonUV.length >= 3) {
+      // ===== 精确多边形面片：使用 THREE.Shape 三角化 =====
+      const shape = new THREE.Shape();
+      shape.moveTo(polygonUV[0][0], polygonUV[0][1]);
+      for (let i = 1; i < polygonUV.length; i++) {
+        shape.lineTo(polygonUV[i][0], polygonUV[i][1]);
       }
-    }
-    for (let j = 0; j < segments; j++) {
-      for (let i = 0; i < segments; i++) {
-        const a = j * (segments + 1) + i;
-        const b = j * (segments + 1) + i + 1;
-        const c = (j + 1) * (segments + 1) + i;
-        const d = (j + 1) * (segments + 1) + i + 1;
-        indices.push(a, b, c);
-        indices.push(b, d, c);
+      shape.closePath();
+
+      const shapeGeo = new THREE.ShapeGeometry(shape);
+      const pos = shapeGeo.attributes.position;
+      const verts3D = [];
+      for (let i = 0; i < pos.count; i++) {
+        const uu = pos.getX(i);
+        const vv = pos.getY(i);
+        const pt3 = uvTo3D(uu, vv);
+        verts3D.push(pt3.x, pt3.y, pt3.z);
       }
-    }
 
-    const meshGeo = new THREE.BufferGeometry();
-    meshGeo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-    meshGeo.setIndex(indices);
-    meshGeo.computeVertexNormals();
+      meshGeo = new THREE.BufferGeometry();
+      meshGeo.setAttribute('position', new THREE.Float32BufferAttribute(verts3D, 3));
+      meshGeo.setIndex(shapeGeo.index);
+      meshGeo.computeVertexNormals();
 
-    // --- 边缘线框（四条边的线段点） ---
-    const edgeVerts = [];
-    // 左部(uMin, vMin→vMax), 右部(uMax, vMin→vMax)
-    const edgePoints = [
-      [uMin, vMin, uMax, vMin],
-      [uMax, vMin, uMax, vMax],
-      [uMax, vMax, uMin, vMax],
-      [uMin, vMax, uMin, vMin],
-    ];
-    for (const [u1, v1, u2, v2] of edgePoints) {
-      const steps = 20;
-      for (let i = 0; i <= steps; i++) {
-        const t = i / steps;
-        const uu = u1 + (u2 - u1) * t;
-        const vv = v1 + (v2 - v1) * t;
-        const pos = new THREE.Vector3().copy(p).add(u.clone().multiplyScalar(uu)).add(v.clone().multiplyScalar(vv));
-        edgeVerts.push(pos.x, pos.y, pos.z);
+      // 多边形轮廓线
+      const edgeVerts = [];
+      for (let i = 0; i <= polygonUV.length; i++) {
+        const [uu, vv] = polygonUV[i % polygonUV.length];
+        const pt3 = uvTo3D(uu, vv);
+        edgeVerts.push(pt3.x, pt3.y, pt3.z);
       }
-    }
+      edgeGeo = new THREE.BufferGeometry();
+      edgeGeo.setAttribute('position', new THREE.Float32BufferAttribute(edgeVerts, 3));
+    } else {
+      // ===== 矩形面片（bounds 模式） =====
+      const segments = 16;
+      const [uMin, uMax] = bounds ? bounds[0] : [-4, 4];
+      const [vMin, vMax] = bounds ? bounds[1] : [-4, 4];
+      const su = (uMax - uMin) / segments;
+      const sv = (vMax - vMin) / segments;
 
-    const edgeGeo = new THREE.BufferGeometry();
-    edgeGeo.setAttribute('position', new THREE.Float32BufferAttribute(edgeVerts, 3));
+      const verts = [];
+      const indices = [];
+      for (let j = 0; j <= segments; j++) {
+        const vv = vMin + j * sv;
+        for (let i = 0; i <= segments; i++) {
+          const uu = uMin + i * su;
+          const pos = uvTo3D(uu, vv);
+          verts.push(pos.x, pos.y, pos.z);
+        }
+      }
+      for (let j = 0; j < segments; j++) {
+        for (let i = 0; i < segments; i++) {
+          const a = j * (segments + 1) + i;
+          const b = j * (segments + 1) + i + 1;
+          const c = (j + 1) * (segments + 1) + i;
+          const d = (j + 1) * (segments + 1) + i + 1;
+          indices.push(a, b, c);
+          indices.push(b, d, c);
+        }
+      }
+
+      meshGeo = new THREE.BufferGeometry();
+      meshGeo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+      meshGeo.setIndex(indices);
+      meshGeo.computeVertexNormals();
+
+      // 矩形边缘线框
+      const edgeVerts = [];
+      const edgePoints = [
+        [uMin, vMin, uMax, vMin],
+        [uMax, vMin, uMax, vMax],
+        [uMax, vMax, uMin, vMax],
+        [uMin, vMax, uMin, vMin],
+      ];
+      for (const [u1, v1, u2, v2] of edgePoints) {
+        const steps = 20;
+        for (let i = 0; i <= steps; i++) {
+          const t = i / steps;
+          const uu = u1 + (u2 - u1) * t;
+          const vv = v1 + (v2 - v1) * t;
+          const pos = uvTo3D(uu, vv);
+          edgeVerts.push(pos.x, pos.y, pos.z);
+        }
+      }
+
+      edgeGeo = new THREE.BufferGeometry();
+      edgeGeo.setAttribute('position', new THREE.Float32BufferAttribute(edgeVerts, 3));
+    }
 
     const color = colors[(idx || 0) % colors.length];
 
@@ -979,7 +1103,7 @@ function BoundedPlaneMesh({ normal, point, bounds, idx }) {
         </line>
       </group>
     );
-  }, [normal, point, bounds, idx]);
+  }, [normal, point, bounds, polygonUV, idx]);
 }
 
 /** 圆盘面片（圆台上下底面等） */
@@ -1071,6 +1195,7 @@ function PlaneEntry({ pl, idx, pointLookup, defSize }) {
       normal={resolved.normal}
       point={resolved.point}
       bounds={resolved.bounds}
+      polygonUV={resolved.polygonUV}
       idx={idx}
     />
   );
@@ -1281,8 +1406,8 @@ const Interactive3DViewer = ({ description, drawingData, imageType }) => {
         <GridPlane />
         <Axes />
 
-        {/* 所有 3D 元素放在同一个 AutoRotate 内，确保整体旋转（如圆台侧面+底面一起转） */}
-        <AutoRotate speed={0.003}>
+        {/* 所有 3D 元素 */}
+        <>
           {/* 显式曲面 */}
           {hasSurfaceEquation && surfaceInfo.type === 'explicit' && (
             <ExplicitSurface
@@ -1325,7 +1450,7 @@ const Interactive3DViewer = ({ description, drawingData, imageType }) => {
             defaultYRange={surfaceInfo.yRange}
             defaultZRange={surfaceInfo.zRange}
           />
-        </AutoRotate>
+        </>
 
         <OrbitControls enableDamping dampingFactor={0.1} minDistance={2} maxDistance={30} target={[0, 0, 0]} />
       </Canvas>

@@ -2,6 +2,7 @@ import { useContext } from 'react';
 import { ThemeContext } from '../theme';
 import Interactive3DViewer from './Interactive3DViewer';
 import FunctionPlot from './FunctionPlot';
+import ThinkingView from './ThinkingView';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -28,7 +29,7 @@ const editIconSmall = (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
 );
 
-const ChatArea = ({ messages = [], isLoading, formatDate, onEditLastMessage }) => {
+const ChatArea = ({ messages = [], isLoading, thinkingState, formatDate, onEditLastMessage }) => {
   const { theme } = useContext(ThemeContext);
 
   const parseMessageContent = (content, images, stepResults) => {
@@ -387,7 +388,13 @@ const ChatArea = ({ messages = [], isLoading, formatDate, onEditLastMessage }) =
           ));
         })()}
 
-        {isLoading && (
+        {isLoading && thinkingState && (
+          <div style={{ maxWidth: '90%', marginRight: 'auto' }}>
+            <ThinkingView thinkingState={thinkingState} theme={theme} />
+          </div>
+        )}
+
+        {isLoading && !thinkingState && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: theme.spacing.sm, padding: theme.spacing.md,
             backgroundColor: theme.colors.cloud, borderRadius: theme.rounded.xl, marginRight: 'auto', maxWidth: '70%',
