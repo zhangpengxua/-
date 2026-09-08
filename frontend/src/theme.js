@@ -1,10 +1,10 @@
 import { createContext } from 'react';
 
 export const lightColors = {
-  primary: "#024ad8",
+  primary: "#087f8c",
   primaryBright: "#296ef9",
-  primaryDeep: "#0e3191",
-  primarySoft: "#c9e0fc",
+  primaryDeep: "#086b76",
+  primarySoft: "#e8f5f5",
   onPrimary: "#ffffff",
   ink: "#1a1a1a",
   inkDeep: "#000000",
@@ -19,8 +19,8 @@ export const lightColors = {
   charcoal: "#3d3d3d",
   hairline: "#e8e8e8",
   hairlineStrong: "#c2c2c2",
-  link: "#024ad8",
-  linkPressed: "#0e3191",
+  link: "#087f8c",
+  linkPressed: "#086b76",
   bloomCoral: "#ff5050",
   bloomRose: "#f9d4d2",
   bloomDeep: "#b3262b",

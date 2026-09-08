@@ -17,9 +17,9 @@ const checkIcon = (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="20 6 9 17 4 12"/></svg>
 );
 
-const InputArea = ({ onSendMessage, ocrResult, isLoading, onStop }) => {
+const InputArea = ({ onSendMessage, ocrResult, isLoading, onStop, initialValue = '' }) => {
   const { theme } = useContext(ThemeContext);
-  const [inputValue, setInputValue] = useState('');
+  const [inputValue, setInputValue] = useState(initialValue);
   const [imagePreview, setImagePreview] = useState(null);
   const [imageBase64Raw, setImageBase64Raw] = useState(null);
   const fileInputRef = useRef(null);
@@ -124,7 +124,7 @@ const InputArea = ({ onSendMessage, ocrResult, isLoading, onStop }) => {
           <div style={{ ...theme.typography.captionBold, color: theme.colors.primary, marginBottom: theme.spacing.xs }}>
             图片识别结果（可编辑修改）{!ocrMinDisplayed ? ' — 请审阅后确认' : ''}：
           </div>
-          <textarea value={ocrText} onChange={e => setOcrText(e.target.value)}
+          <textarea aria-label="确认识别文字" value={ocrText} onChange={e => setOcrText(e.target.value)}
             style={{ ...theme.typography.bodyMd, width: '100%', height: '140px', padding: theme.spacing.sm,
               borderRadius: theme.rounded.sm, border: '1px solid ' + theme.colors.hairlineStrong,
               backgroundColor: theme.colors.canvas, color: theme.colors.ink, outline: 'none', resize: 'vertical' }}
@@ -164,7 +164,7 @@ const InputArea = ({ onSendMessage, ocrResult, isLoading, onStop }) => {
             color: theme.colors.graphite, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             onMouseEnter={e => { e.target.style.backgroundColor = theme.colors.fog; }}
             onMouseLeave={e => { e.target.style.backgroundColor = 'transparent'; }}>
-            {imageIcon}
+            {imageIcon}<span>上传图片</span>
             <input ref={fileInputRef} type="file" accept="image/*"
               onChange={handleImageUpload} onClick={e => { e.target.value = null; }} style={{ display: 'none' }} />
           </label>
@@ -172,7 +172,7 @@ const InputArea = ({ onSendMessage, ocrResult, isLoading, onStop }) => {
             color: theme.colors.graphite, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             onMouseEnter={e => { e.target.style.backgroundColor = theme.colors.fog; }}
             onMouseLeave={e => { e.target.style.backgroundColor = 'transparent'; }}>
-            {cameraIcon}
+            {cameraIcon}<span>拍照</span>
             <input ref={cameraInputRef} type="file" accept="image/*" capture="environment"
               onChange={handleCameraCapture} onClick={e => { e.target.value = null; }} style={{ display: 'none' }} />
           </label>
@@ -180,7 +180,7 @@ const InputArea = ({ onSendMessage, ocrResult, isLoading, onStop }) => {
 
         {/* Fix 6: Edit last message button - moved to ChatArea, now on last user message bubble */}
 
-        <input type="text" value={inputValue} onChange={e => setInputValue(e.target.value)}
+        <textarea aria-label="题目内容" rows={5} value={inputValue} onChange={e => setInputValue(e.target.value)}
           placeholder={isOcrPending ? '输入补充说明（可选）…' : '输入数学问题…'}
           style={{ ...theme.typography.bodyMd, flex: 1, padding: theme.spacing.sm + ' ' + theme.spacing.md,
             borderRadius: theme.rounded.md, border: '1px solid ' + theme.colors.hairline,
