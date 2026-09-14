@@ -9,19 +9,29 @@ export default function App() {
  const refresh=()=>axios.get(`${API}/conversations`,{timeout:5000}).then(r=>setConversations(r.data)).catch(()=>{});
  useEffect(()=>{axios.get(`${API}/conversations`,{timeout:5000}).then(r=>setConversations(r.data)).catch(()=>setError('暂时无法连接后端。你仍可操作交互示例。'));return()=>request.current?.abort();},[]);
  async function create(){try{const {data}=await axios.post(`${API}/conversations`);update(data);setOcr(null);setError('');refresh();return data;}catch{setError('无法创建题目，请检查后端是否启动。');return null;}}
- async function select(id){try{const {data}=await axios.get(`${API}/conversations/${id}`);update(data);setOcr(null);setError('');}catch{setError('题目读取失败，请重试。');}}
- async function remove(id){try{await axios.delete(`${API}/conversations/${id}`);if(currentRef.current?._id===id)update(null);refresh();}catch{setError('删除失败，请重试。');}}
- async function send(text,image,ocrText){
+ async function select(id){try{const {data}=await axios.get(`${API}/conversations/${id}`);update(data);setOcr(null);setError('');return true;}catch{setError('题目读取失败，请重试。');return false;}}
+ async function remove(id){try{await axios.delete(`${API}/conversations/${id}`);if(currentRef.current?._id===id)update(null);refresh();return true;}catch{setError('删除失败，请重试。');return false;}}
+ async function send(text,image,ocrText,meta){
   if(busy)return;setBusy(true);setError('');const controller=new AbortController();request.current=controller;
   try{
    if(text==='__OCR_REQUEST__'){const r=await axios.post(`${API}/ocr`,{imageBase64:image?.split(',')[1]},{signal:controller.signal,timeout:60000});setOcr(r.data.text||'[未识别到文字，请手动输入]');return;}
-   const follow=text.startsWith('针对题目追问：');
+   // 结构化来源字段：来源与类型由交互入口显式给出，旧文本前缀仅作兜底。
+   const kind=meta?.kind || (text.startsWith('针对题目追问：')?'followup':'question');
+   const source=meta?.source==='demo'?'demo':'user_problem';
+   const follow=kind==='followup';
    let conv=follow || !currentRef.current?.messages?.length ? currentRef.current : null;
-   if(!conv){const {data}=await axios.post(`${API}/conversations`,{},{signal:controller.signal});conv=data;}
+   if(!conv){const {data}=await axios.post(`${API}/conversations`,{source},{signal:controller.signal});conv=data;}
    const content=ocrText?`${text}\n图片识别文字：${ocrText}`:text;
    // Show the submitted problem while retaining the original answer during follow-up.
    update({...conv,messages:[...(conv.messages||[]),{role:'user',content}]});
-   const {data}=await axios.post(`${API}/conversations/${conv._id}/message`,{content,imageBase64:image?.split(',')[1]||null},{signal:controller.signal,timeout:240000});
+   const {data}=await axios.post(`${API}/conversations/${conv._id}/message`,{
+     content,
+     imageBase64:image?.split(',')[1]||null,
+     source,
+     kind,
+     studentQuestion:meta?.studentQuestion||null,
+     activeStepId:meta?.activeStepId??null,
+   },{signal:controller.signal,timeout:240000});
    if(data.aborted)return;
    const answer=data.finalAnswer||'';
    if(answer.includes('服务暂时不可用')||answer.includes('服务调用失败')){setError('模型调用失败，请检查中转地址、模型配置或账户余额。');update(conv);return;}

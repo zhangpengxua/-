@@ -1,14 +1,9 @@
 const axios = require('axios');
 require('dotenv').config();
 
-const AIHUBMIX_API_URL = process.env.AIHUBMIX_API_URL || 'https://aihubmix.com/v1/chat/completions';
-const AIHUBMIX_API_KEY = process.env.AIHUBMIX_API_KEY;
-
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || AIHUBMIX_API_KEY;
-const DEEPSEEK_API_URL = process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1/chat/completions';
-
-const LLM_CHAT_MODEL = process.env.LLM_CHAT_MODEL || 'deepseek-chat';
-const LLM_IMAGE_MODEL = process.env.LLM_IMAGE_MODEL || 'claude-sonnet-4-6';
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+const DEEPSEEK_API_URL = process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/chat/completions';
+const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-flash';
 
 // ==================== Prompt template definitions ====================
 const PROMPT_TEMPLATES = {
@@ -57,37 +52,98 @@ class LLMService {
     console.log(`[LLM:${type}] model=${model} promptLen=${promptLen}`);
   }
 
-  static async callLLMChat(messages, systemPrompt = '', maxTokens = 4096) {
-    this.logCall('chat', LLM_CHAT_MODEL, (systemPrompt + JSON.stringify(messages)).length);
-    return this._callLLM(LLM_CHAT_MODEL, messages, systemPrompt, maxTokens);
+  static async callLLMChat(messages, systemPrompt = '', maxTokens = 4096, options = {}) {
+    this.logCall('chat', DEEPSEEK_MODEL, (systemPrompt + JSON.stringify(messages)).length);
+    return this._callLLM(messages, systemPrompt, maxTokens, options);
   }
 
-  static async callLLMImage(messages, systemPrompt = '', maxTokens = 4096) {
-    this.logCall('image', LLM_IMAGE_MODEL, (systemPrompt + JSON.stringify(messages)).length);
-    return this._callLLM(LLM_IMAGE_MODEL, messages, systemPrompt, maxTokens);
+  static async callLLMImage(messages, systemPrompt = '', maxTokens = 4096, options = {}) {
+    this.logCall('multimodal', DEEPSEEK_MODEL, (systemPrompt + JSON.stringify(messages)).length);
+    return this._callLLM(messages, systemPrompt, maxTokens, options);
   }
 
-  static async _callLLM(model, messages, systemPrompt = '', maxTokens = 4096) {
-    const isDeepSeek = model === 'deepseek-chat';
-    const url = isDeepSeek ? DEEPSEEK_API_URL : AIHUBMIX_API_URL;
-    const key = isDeepSeek ? DEEPSEEK_API_KEY : AIHUBMIX_API_KEY;
+  // 结构化调用：options 支持向下兼容扩展（signal/timeoutMs/temperature/taskType），
+  // 学习分析、出题、批改等新流程通过 taskType 区分日志，且不再输出正文预览。
+  static async callLLMStructured(messages, systemPrompt = '', maxTokens = 8192, options = {}) {
+    this.logCall(options.taskType || 'structured', DEEPSEEK_MODEL, (systemPrompt + JSON.stringify(messages)).length);
+    return this._callLLM(messages, systemPrompt, maxTokens, {
+      thinking: { type: 'disabled' },
+      responseFormat: { type: 'json_object' },
+      ...options,
+    });
+  }
 
+  static getModelName() {
+    return DEEPSEEK_MODEL;
+  }
+
+  static async _callLLM(messages, systemPrompt = '', maxTokens = 4096, options = {}) {
     try {
       const msgs = systemPrompt ? [{ role: 'system', content: systemPrompt }, ...messages] : [...messages];
-      const response = await axios.post(url, {
-        model, messages: msgs, max_tokens: maxTokens, temperature: 0.7
-      }, {
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-        timeout: 180000, maxRedirects: 5
+      const body = {
+        model: DEEPSEEK_MODEL,
+        messages: msgs,
+        max_tokens: maxTokens,
+        temperature: options.temperature === undefined ? 0.7 : options.temperature,
+      };
+      if (options.thinking) body.thinking = options.thinking;
+      if (options.responseFormat) body.response_format = options.responseFormat;
+
+      const response = await axios.post(DEEPSEEK_API_URL, body, {
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
+        timeout: options.timeoutMs || 180000, maxRedirects: 5,
+        signal: options.signal,
       });
-      const content = response.data.choices[0].message.content;
-      console.log(`[LLM:${model}] Response length:`, content?.length, 'First 200 chars:', content?.substring(0, 200));
+      const choice = response.data?.choices?.[0];
+      const content = choice?.message?.content;
+      const finishReason = choice?.finish_reason || 'unknown';
+      const reasoningLength = choice?.message?.reasoning_content?.length || 0;
+      if (options.taskType) {
+        // 新流程日志只记录任务类型、耗时与字符量，不输出正文内容。
+        console.log(
+          `[LLM:${options.taskType}] model=${DEEPSEEK_MODEL} finish=${finishReason} contentLen=${content?.length || 0}`
+        );
+      } else {
+        console.log(
+          `[LLM:${DEEPSEEK_MODEL}] finish=${finishReason} contentLen=${content?.length || 0} reasoningLen=${reasoningLength}`,
+          'First 200 chars:', content?.substring(0, 200)
+        );
+      }
+      if (typeof content !== 'string' || !content.trim()) {
+        const emptyError = new Error(
+          `DeepSeek 未返回可用正文 (finish_reason=${finishReason}, reasoning_length=${reasoningLength})`
+        );
+        emptyError.code = 'LLM_EMPTY_CONTENT';
+        throw emptyError;
+      }
       return content;
     } catch (error) {
       const detail = error.response?.data;
-      console.error(`[LLM:${model}] API Error:`, JSON.stringify(detail || error.message));
+      console.error(`[LLM:${DEEPSEEK_MODEL}] API Error:`, JSON.stringify(detail || error.message));
       throw error;
     }
+  }
+
+  // 将上游 Axios 异常映射为业务错误码；认证类错误不可重试。
+  static classifyError(error) {
+    if (!error) return { code: 'LLM_UPSTREAM_ERROR', retryable: true, message: '模型调用失败' };
+    if (error.code === 'ERR_CANCELED' || error.name === 'CanceledError' || error.name === 'AbortError') {
+      return { code: 'CANCELLED', retryable: false, message: '请求已被取消' };
+    }
+    if (error.code === 'ECONNABORTED') {
+      return { code: 'LLM_TIMEOUT', retryable: true, message: '模型请求超时' };
+    }
+    const status = error.response?.status;
+    if (status === 401 || status === 403) {
+      return { code: 'LLM_UPSTREAM_ERROR', retryable: false, message: '模型服务认证失败，请检查 API Key' };
+    }
+    if (status === 429) {
+      return { code: 'LLM_UPSTREAM_ERROR', retryable: true, message: '模型服务限流，请稍后重试' };
+    }
+    if (status >= 500) {
+      return { code: 'LLM_UPSTREAM_ERROR', retryable: true, message: '模型服务暂时不可用' };
+    }
+    return { code: 'LLM_UPSTREAM_ERROR', retryable: true, message: error.message || '模型调用失败' };
   }
 
   // ==================== JSON 解析与验证 ====================
@@ -228,7 +284,7 @@ class LLMService {
   }
 
   // ==================== 第一层：拆解题步骤 + 提取结构化数据 ====================
-  static async firstLayerLLM(context, userInput) {
+  static async firstLayerLLM(context, userInput, imageBase64 = null) {
     const systemPrompt = [
       '你是一位资深理科教师。给出详尽、准确、无幻觉的解题过程。',
       '',
@@ -355,14 +411,26 @@ class LLMService {
       'imageType: NO_IMAGE | MATH_STATIC_EQUATION | MATH_STATIC_2D_FUNCTION | MATH_STATIC_SURFACE | MATH_STATIC_IMPLICIT | MATH_STATIC_ABSTRACT | MATH_DYNAMIC_GEOMETRY | MATH_DYNAMIC_3D_GEOMETRY | CHEMISTRY_CRYSTAL | PHYSICS_ENGINE',
     ].join('\n');
 
-    const messages = [{
-      role: 'user',
-      content: `${context ? '对话上下文：\n' + context + '\n\n' : ''}请按以下要求处理问题：\n\n1. **解题步骤**：给出详细的解题步骤文本，使用Markdown和LaTeX。\n2. **图像判断**：判断哪些步骤需要配图，设置 needImage 和 imageType。\n3. **数据提取**：需要配图的步骤，提取结构化几何/函数数据到 drawingData（坐标、点、线、面、方程）。\n\n注意：你不需要画图。你只负责提取数据，渲染由前端引擎完成。\n\n**图像类型选择指南：**\n- 2D函数曲线(y=f(x))→ MATH_STATIC_2D_FUNCTION\n- 3D曲面(z=f(x,y),隐式曲面)→ MATH_STATIC_SURFACE\n- 隐式方程(平面/曲线)→ MATH_STATIC_IMPLICIT\n- 3D几何体(棱柱/棱锥等)→ MATH_STATIC_ABSTRACT\n- 一般方程/坐标系绘图→ MATH_STATIC_EQUATION\n- 动画/动点轨迹→ MATH_DYNAMIC_GEOMETRY\n- 3D动画/旋转→ MATH_DYNAMIC_3D_GEOMETRY\n\n**drawingData 必须同时输出 points + lines + planes + functions**。\n**立体几何禁止只输出点线**：planes 须含完整 equation+normal+point+bounds（圆面加 radius+boundary），曲面侧面放 functions。\n**前端不会自动补面，遗漏则无法渲染**。\n\n问题：${userInput}`
-    }];
+    const requestText = `${context ? '对话上下文：\n' + context + '\n\n' : ''}请按以下要求处理问题：\n\n1. **解题步骤**：给出详细的解题步骤文本，使用Markdown和LaTeX。\n2. **图像判断**：判断哪些步骤需要配图，设置 needImage 和 imageType。\n3. **数据提取**：需要配图的步骤，提取结构化几何/函数数据到 drawingData（坐标、点、线、面、方程）。\n\n注意：你不需要画图。你只负责提取数据，渲染由前端引擎完成。\n\n**图像类型选择指南：**\n- 2D函数曲线(y=f(x))→ MATH_STATIC_2D_FUNCTION\n- 3D曲面(z=f(x,y),隐式曲面)→ MATH_STATIC_SURFACE\n- 隐式方程(平面/曲线)→ MATH_STATIC_IMPLICIT\n- 3D几何体(棱柱/棱锥等)→ MATH_STATIC_ABSTRACT\n- 一般方程/坐标系绘图→ MATH_STATIC_EQUATION\n- 动画/动点轨迹→ MATH_DYNAMIC_GEOMETRY\n- 3D动画/旋转→ MATH_DYNAMIC_3D_GEOMETRY\n\n**drawingData 必须同时输出 points + lines + planes + functions**。\n**立体几何禁止只输出点线**：planes 须含完整 equation+normal+point+bounds（圆面加 radius+boundary），曲面侧面放 functions。\n**前端不会自动补面，遗漏则无法渲染**。\n\n问题：${userInput}`;
+    const userContent = imageBase64
+      ? [
+          { type: 'text', text: requestText },
+          {
+            type: 'image_url',
+            image_url: {
+              url: imageBase64.startsWith('data:image/')
+                ? imageBase64
+                : `data:image/png;base64,${imageBase64}`,
+              detail: 'high',
+            },
+          },
+        ]
+      : requestText;
+    const messages = [{ role: 'user', content: userContent }];
 
     const MAX_RETRIES = 2;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      const result = await this.callLLMChat(messages, systemPrompt);
+      const result = await this.callLLMStructured(messages, systemPrompt);
       const parsed = this.tryExtractJSON(result);
       if (!parsed) {
         if (attempt < MAX_RETRIES) {
@@ -420,7 +488,7 @@ class LLMService {
     ].join('\n');
 
     const messages = [{ role: 'user', content: '请从以下解题步骤中提取几何数据。\n解题步骤：' + stepDescription }];
-    const result = await this.callLLMImage(messages, systemPrompt);
+    const result = await this.callLLMStructured(messages, systemPrompt);
     try {
       const jsonMatch = result.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
@@ -435,14 +503,14 @@ class LLMService {
   // ==================== 提取曲面参数（仅提取结构化数据） ====================
   static async extractSurfaceParams(stepDescription, imageType, previousParams = null) {
     const systemPrompt = '你是一个3D曲面参数提取专家。请从题目描述中提取曲面数据。输出仅包含JSON对象。参数：title, surfaceType, surfaceEquation, xRange, yRange, zRange, resolution, points, planes, viewAngle';
-    const result = await this.callLLMImage([{ role: 'user', content: '请提取曲面数据。\n' + stepDescription }], systemPrompt, 2000);
+    const result = await this.callLLMStructured([{ role: 'user', content: '请提取曲面数据。\n' + stepDescription }], systemPrompt, 4000);
     return this.tryExtractJSON(result);
   }
 
   // ==================== 提取2D函数图像参数（仅提取结构化数据） ====================
   static async extractFunctionPlotParams(stepDescription, imageType, previousParams = null) {
     const systemPrompt = '你是一个2D函数图像参数提取专家。请从题目描述中提取函数数据。输出仅包含JSON对象。参数：title, functions[{expr,color,label,lineStyle}], xRange, yRange, points, showGrid, showLegend';
-    const result = await this.callLLMImage([{ role: 'user', content: '请提取2D函数数据。\n' + stepDescription }], systemPrompt, 2000);
+    const result = await this.callLLMStructured([{ role: 'user', content: '请提取2D函数数据。\n' + stepDescription }], systemPrompt, 4000);
     return this.tryExtractJSON(result);
   }
 
@@ -450,7 +518,7 @@ class LLMService {
   static async extractFunctionParams(stepDescription, imageType, previousParams = null) {
     const systemPrompt = '你是一个函数参数提取专家。请根据题目描述提取函数数据。输出仅包含JSON对象。参数：title, functions[{expr,color,label,type}], xRange, yRange, showGrid, showLegend';
     const messages = [{ role: 'user', content: '请提取函数数据。\n' + stepDescription }];
-    const result = await this.callLLMChat(messages, systemPrompt);
+    const result = await this.callLLMStructured(messages, systemPrompt, 4000);
     try {
       const jsonMatch = result.match(/\{[\s\S]*\}/);
       if (jsonMatch) return JSON.parse(jsonMatch[0].replace(/\\n/g, '\x00NL\x00').replace(/(?<!\\)\\([a-zA-Z])/g, '\\\\$1').replace(/\x00NL\x00/g, '\\n'));
@@ -544,7 +612,12 @@ class LLMService {
   static async generateConversationTitle(messages) {
     const systemPrompt = '你是一个标题生成助手。请根据对话内容生成一个简洁的对话标题，不超过20个字。';
     const messagesText = messages.map(m => m.role + ': ' + m.content).join('\n');
-    const result = await this.callLLMChat([{ role: 'user', content: '请为以下对话生成一个简洁的标题（不超过20个字）：\n\n' + messagesText }], systemPrompt);
+    const result = await this.callLLMChat(
+      [{ role: 'user', content: '请为以下对话生成一个简洁的标题（不超过20个字）：\n\n' + messagesText }],
+      systemPrompt,
+      128,
+      { thinking: { type: 'disabled' } }
+    );
     return result.trim().replace(/["""'']/g, '');
   }
 

@@ -2,36 +2,48 @@ const express = require('express');
 const router = express.Router();
 const LLMService = require('../utils/llmService');
 const OCRService = require('../utils/ocrService');
+const conversationRepository = require('../repositories/conversationRepository');
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-let conversations = [];
-let conversationIdCounter = 1;
 const activeRequests = {};
-
-const generateId = () => 'conv_' + conversationIdCounter++;
 
 function finishAbort(convId, res) {
   delete activeRequests[convId];
   if (res.headersSent) return;
-  const conversation = conversations.find(c => c._id === convId);
+  const conversation = conversationRepository.getConversation(convId);
   res.json({ aborted: true, conversation });
 }
 
+// 兼容旧请求：接受明确请求字段（source/kind/studentQuestion/activeStepId），
+// 旧客户端未传时按文本形态推断。
+function resolveUserMessageMeta(body) {
+  const content = typeof body.content === 'string' ? body.content : '';
+  const isLegacyFollowup = content.startsWith('针对题目追问：');
+  const kind = body.kind === 'followup' || body.kind === 'question'
+    ? body.kind
+    : (isLegacyFollowup ? 'followup' : 'question');
+  return {
+    kind,
+    source: body.source === 'demo' ? 'demo' : 'user_problem',
+    studentQuestion: typeof body.studentQuestion === 'string' && body.studentQuestion.trim() ? body.studentQuestion.trim() : null,
+    activeStepId: body.activeStepId === undefined ? null : body.activeStepId,
+  };
+}
+
 router.get('/', async (_, res) => {
-  const list = conversations.map(c => ({ _id: c._id, title: c.title, createdAt: c.createdAt, updatedAt: c.updatedAt })).sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-  res.json(list);
+  res.json(conversationRepository.listConversationSummaries());
 });
 
 router.get('/:id', async (req, res) => {
-  const conv = conversations.find(c => c._id === req.params.id);
+  const conv = conversationRepository.getConversation(req.params.id);
   if (!conv) return res.status(404).json({ error: 'Not found' });
   res.json(conv);
 });
 
-router.post('/', async (_, res) => {
-  const conv = { _id: generateId(), title: '未命名对话', messages: [], createdAt: new Date(), updatedAt: new Date() };
-  conversations.push(conv);
+router.post('/', async (req, res) => {
+  const source = req.body?.source === 'demo' ? 'demo' : 'user_problem';
+  const conv = conversationRepository.createConversation({ source });
   res.json(conv);
 });
 
@@ -41,7 +53,7 @@ router.post('/:id/message', async (req, res) => {
   try {
     const { content, imageBase64 } = req.body;
     convId = req.params.id;
-    const conversation = conversations.find(c => c._id === convId);
+    const conversation = conversationRepository.getConversation(convId);
     if (!conversation) return res.status(404).json({ error: 'Not found' });
 
     let ocrText = null;
@@ -49,21 +61,19 @@ router.post('/:id/message', async (req, res) => {
       try { ocrText = await OCRService.recognizeText(imageBase64); } catch (e) {}
     }
 
-    conversation.messages.push({
-      role: 'user', content, imageUrl: imageBase64 ? `data:image/png;base64,${imageBase64}` : null, ocrText: null, timestamp: new Date()
-    });
+    conversationRepository.appendUserMessage(conversation, { content, imageUrl: imageBase64 ? `data:image/png;base64,${imageBase64}` : null, ocrText, ...resolveUserMessageMeta(req.body) });
     console.log('[POST msg] user content:', content?.substring(0, 200));
 
     activeRequests[convId] = { abort: false };
 
-    let finalAnswer = null, stepResults = [];
+    let finalAnswer = null, stepResults = [], llmFailed = false;
 
     try {
       const context = conversation.messages.slice(0, -1).map(m => m.role + ': ' + m.content).join('\n');
       if (activeRequests[convId]?.abort) return finishAbort(convId, res);
 
       // 第一层：拆解题步骤 + 提取结构化数据（drawingData）
-      const layer1 = await LLMService.firstLayerLLM(context, content);
+      const layer1 = await LLMService.firstLayerLLM(context, content, imageBase64);
 
       for (const step of layer1.steps) {
         if (activeRequests[convId]?.abort) return finishAbort(convId, res);
@@ -109,16 +119,23 @@ router.post('/:id/message', async (req, res) => {
       finalAnswer = finalR.finalAnswer;
     } catch (e) {
       console.error('LLM error:', e.message);
+      llmFailed = true;
       finalAnswer = '抱歉，服务暂时不可用。\n错误: ' + e.message;
       stepResults = [{ id: 1, description: '服务调用失败', needImage: false }];
     }
 
     if (activeRequests[convId]?.abort) return finishAbort(convId, res);
     delete activeRequests[convId];
-    if (!conversations.find(c => c._id === convId)) return;
+    if (!conversationRepository.getConversation(convId)) return;
 
     const images = [];
-    conversation.messages.push({ role: 'assistant', content: finalAnswer, images, stepResults, timestamp: new Date() });
+    conversationRepository.appendAssistantMessage(conversation, {
+      content: finalAnswer,
+      images,
+      stepResults,
+      // 降级文案显式标记 fallback，不冒充成功解答。
+      status: llmFailed ? 'fallback' : 'completed',
+    });
     console.log('[POST] stepResults count:', stepResults.length);
     for (const sr of stepResults) {
       console.log(`[POST] step ${sr.id}: needImg=${sr.needImage} imgType=${sr.imageType} drawingData=${!!sr.drawingData} isGeometry=${sr.isGeometry} isSurface=${sr.isSurface} is2DPlot=${sr.is2DPlot}`);
@@ -126,12 +143,12 @@ router.post('/:id/message', async (req, res) => {
 
     if (conversation.messages.length > 1) {
       try {
-        conversation.title = (await LLMService.generateConversationTitle(conversation.messages)).trim();
+        conversationRepository.renameConversation(conversation, (await LLMService.generateConversationTitle(conversation.messages)).trim());
       } catch (e) {
-        conversation.title = content.substring(0, 30) + (content.length > 30 ? '...' : '');
+        conversationRepository.renameConversation(conversation, content.substring(0, 30) + (content.length > 30 ? '...' : ''));
       }
     }
-    conversation.updatedAt = new Date();
+    conversationRepository.touchConversation(conversation);
     res.json({ conversation, stepResults, images, finalAnswer });
   } catch (e) {
     delete activeRequests[convId];
@@ -141,7 +158,7 @@ router.post('/:id/message', async (req, res) => {
 
 router.post('/:id/abort', async (req, res) => {
   const cid = req.params.id;
-  const conversation = conversations.find(c => c._id === cid);
+  const conversation = conversationRepository.getConversation(cid);
   if (!conversation) return res.status(404).json({ error: 'Not found' });
   if (activeRequests[cid]) activeRequests[cid].abort = true;
   res.json({ aborted: true, conversation });
@@ -150,9 +167,8 @@ router.post('/:id/abort', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   const cid = req.params.id;
   if (activeRequests[cid]) { activeRequests[cid].abort = true; }
-  const idx = conversations.findIndex(c => c._id === cid);
-  if (idx === -1) return res.status(404).json({ error: 'Not found' });
-  conversations.splice(idx, 1);
+  const deleted = conversationRepository.deleteConversation(cid);
+  if (!deleted) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Deleted' });
 });
 
@@ -168,7 +184,7 @@ router.post('/:id/message-stream', async (req, res) => {
   try {
     const { content, imageBase64 } = req.body;
     convId = req.params.id;
-    const conversation = conversations.find(c => c._id === convId);
+    const conversation = conversationRepository.getConversation(convId);
     if (!conversation) return res.status(404).json({ error: 'Not found' });
 
     // Configure SSE
@@ -183,15 +199,13 @@ router.post('/:id/message-stream', async (req, res) => {
       try { ocrText = await OCRService.recognizeText(imageBase64); } catch (e) {}
     }
 
-    conversation.messages.push({
-      role: 'user', content, imageUrl: imageBase64 ? `data:image/png;base64,${imageBase64}` : null, ocrText: null, timestamp: new Date()
-    });
+    conversationRepository.appendUserMessage(conversation, { content, imageUrl: imageBase64 ? `data:image/png;base64,${imageBase64}` : null, ocrText, ...resolveUserMessageMeta(req.body) });
     console.log('[SSE] user content:', content?.substring(0, 200));
 
     activeRequests[convId] = { abort: false };
     req.on('close', () => { if (activeRequests[convId]) activeRequests[convId].abort = true; });
 
-    let finalAnswer = null, stepResults = [];
+    let finalAnswer = null, stepResults = [], llmFailed = false;
 
     // --- Phase 1: 题目分析 ---
     sendSSE('thinking:update', {
@@ -212,7 +226,7 @@ router.post('/:id/message-stream', async (req, res) => {
       currentStepIndex: undefined,
     });
 
-    const layer1 = await LLMService.firstLayerLLM(context, content);
+    const layer1 = await LLMService.firstLayerLLM(context, content, imageBase64);
 
     sendSSE('thinking:update', {
       phase: 'thinking',
@@ -322,16 +336,21 @@ router.post('/:id/message-stream', async (req, res) => {
     delete activeRequests[convId];
 
     const images = [];
-    conversation.messages.push({ role: 'assistant', content: finalAnswer, images, stepResults, timestamp: new Date() });
+    conversationRepository.appendAssistantMessage(conversation, {
+      content: finalAnswer,
+      images,
+      stepResults,
+      status: llmFailed ? 'fallback' : 'completed',
+    });
 
     if (conversation.messages.length > 1) {
       try {
-        conversation.title = (await LLMService.generateConversationTitle(conversation.messages)).trim();
+        conversationRepository.renameConversation(conversation, (await LLMService.generateConversationTitle(conversation.messages)).trim());
       } catch (e) {
-        conversation.title = content.substring(0, 30) + (content.length > 30 ? '...' : '');
+        conversationRepository.renameConversation(conversation, content.substring(0, 30) + (content.length > 30 ? '...' : ''));
       }
     }
-    conversation.updatedAt = new Date();
+    conversationRepository.touchConversation(conversation);
 
     sendSSE('complete', {
       conversation,

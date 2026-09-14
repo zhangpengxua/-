@@ -1,0 +1,171 @@
+/* 学习历史视图：与工作台共用 .learning-app 的 --teal/--ink/--muted/--line 设计令牌。 */
+.study-view { display: contents; }
+.study-view.view-hidden { display: none !important; }
+
+.history-workspace { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.history-tabs { display: flex; gap: 8px; background: white; border: 1px solid var(--line); border-radius: 12px; padding: 8px; }
+.history-tab { position: relative; border: 0; background: transparent; padding: 9px 18px; border-radius: 8px; font-size: 13px; color: #5d7280; }
+.history-tab:hover { background: #edf6f6; }
+.history-tab.tab-active { background: var(--teal); color: white; font-weight: 650; }
+.dot-badge { position: absolute; top: 6px; right: 8px; width: 8px; height: 8px; border-radius: 50%; background: #ff9d3b; }
+.history-tab.tab-active .dot-badge { background: white; }
+.history-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+
+.history-body > .records-pane, .history-body > .report-pane,
+.history-body > .sessions-pane, .history-body > .practice-pane,
+.history-body > .result-pane { background: white; border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+
+.pane-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.pane-toolbar h3 { font-size: 15px; }
+.toolbar-note { color: var(--muted); font-size: 11px; margin-left: auto; }
+.range-chips { display: flex; gap: 6px; }
+.learning-app .range-chips button.chip { padding: 5px 12px; font-size: 12px; border-radius: 16px; }
+.chip-active { background: #e8f4f4 !important; color: var(--teal) !important; border-color: #9ed3d8 !important; font-weight: 650; }
+.chip-sm { display: inline-block; background: #f0f5f7; color: #5d7280; border-radius: 12px; padding: 3px 10px; font-size: 11px; white-space: nowrap; }
+.chip-sm.tone-good { background: #e4f5ea; color: #1d7a44; }
+.chip-sm.tone-warn { background: #fff3df; color: #875518; }
+.chip-sm.tone-bad { background: #fde8e8; color: #a83a3a; }
+.prio-high { background: #fde8e8; color: #a83a3a; }
+.prio-medium { background: #fff3df; color: #875518; }
+.prio-low { background: #f0f5f7; color: #5d7280; }
+
+.pane-error { background: #fdecec; color: #a83a3a; border-radius: 8px; padding: 9px 14px; font-size: 12px; }
+.pane-status { color: var(--teal); font-size: 12px; padding: 8px 2px; }
+.pane-empty { padding: 32px 12px; text-align: center; color: #81939d; line-height: 1.9; }
+.pane-empty h3 { font-size: 15px; color: #5d7280; margin-bottom: 6px; }
+.pane-footer { display: flex; align-items: center; gap: 14px; border-top: 1px solid #eff3f5; padding-top: 12px; }
+.footer-note { color: var(--muted); font-size: 12px; flex: 1; }
+.storage-note { color: #9aa9b2; font-size: 11px; }
+
+/* 记录列表 */
+.record-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.record-head, .record-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) 96px 48px 92px 76px; align-items: center; gap: 8px; }
+.record-head { color: var(--muted); font-size: 11px; padding: 0 6px; }
+.record-row { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: #fbfdfd; }
+.record-row.is-current { border-color: #9ed3d8; background: #f2faf9; }
+.check-cell { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+.check-spacer { width: 14px; }
+.learning-app .record-title { border: 0; background: transparent; justify-content: flex-start; padding: 4px 6px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.record-time { color: var(--muted); font-size: 11px; }
+.record-count { color: var(--muted); font-size: 12px; text-align: center; }
+.state-badge { font-size: 10px; border-radius: 10px; padding: 3px 8px; text-align: center; }
+.state-ok { background: #e8f5f5; color: var(--teal); }
+.state-off { background: #f0f2f4; color: #93a3ac; }
+.record-actions { display: flex; gap: 4px; justify-content: flex-end; }
+.learning-app .icon-btn { padding: 4px 7px; font-size: 11px; }
+.learning-app .icon-btn.danger { color: #a83a3a; }
+.learning-app .text-button { padding: 4px 8px; color: var(--teal); font-size: 12px; }
+.learning-app .danger-text { color: #a8543a; }
+
+.job-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #eaf6f6; border: 1px solid #cde9ea; color: #086c78; border-radius: 8px; padding: 8px 12px; font-size: 12px; flex: 1; }
+
+/* 报告 */
+.report-head { display: flex; flex-direction: column; gap: 8px; }
+.report-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.report-switch { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+.report-switch select { border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 12px; background: white; }
+.report-disclaimer { background: #fffdf3; border: 1px dashed #e8d9a0; color: #7a6a2c; font-size: 12px; border-radius: 8px; padding: 8px 12px; }
+.banner { display: flex; align-items: center; gap: 12px; border-radius: 8px; padding: 9px 14px; font-size: 12px; }
+.banner .primary { margin-left: auto; padding: 5px 12px; font-size: 12px; }
+.banner-stale { background: #fff3df; color: #875518; }
+.banner-evidence { background: #eaf6f6; color: #086c78; }
+.limitation-list { margin: 0; padding-left: 18px; color: #7d8f9a; font-size: 11px; line-height: 1.8; }
+.report-pane > p { line-height: 1.8; font-size: 13px; }
+
+.kp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; }
+.kp-card { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: #fbfdfd; display: flex; flex-direction: column; gap: 8px; }
+.kp-card.kp-selected { border-color: var(--teal); background: #f2faf9; }
+.kp-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.kp-head h3 { font-size: 14px; }
+.kp-path { color: var(--muted); font-size: 11px; margin: 0; }
+.kp-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.kp-reason { margin: 0; font-size: 12px; line-height: 1.7; }
+.kp-priority-reason { margin: 0; color: var(--muted); font-size: 11px; }
+.kp-rule-note { margin: 0; color: #8a6d1c; font-size: 11px; }
+.kp-advice, .kp-goal { margin: 0; font-size: 12px; line-height: 1.7; }
+.kp-select { display: flex; gap: 6px; align-items: center; font-size: 12px; color: #5d7280; border-top: 1px dashed var(--line); padding-top: 8px; }
+.badge.tone-good { background: #e4f5ea; color: #1d7a44; }
+.badge.tone-warn { background: #fff3df; color: #875518; }
+.badge.tone-bad { background: #fde8e8; color: #a83a3a; }
+.badge.tone-info { background: #e8f5f5; color: var(--teal); }
+.badge.tone-muted { background: #f0f2f4; color: #7d8f9a; }
+
+.evidence-list { border-top: 1px dashed var(--line); padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.evidence-head { font-size: 11px; color: var(--muted); }
+.evidence-list ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.evidence-item { display: flex; align-items: baseline; gap: 8px; font-size: 11px; flex-wrap: wrap; }
+.ev-kind { flex-shrink: 0; border-radius: 8px; padding: 2px 7px; font-size: 10px; }
+.kind-topic { background: #eef2f4; color: #6a7d88; }
+.kind-explicit_confusion { background: #fff3df; color: #875518; }
+.kind-student_reasoning { background: #e8f0fd; color: #2d5fa8; }
+.kind-graded_attempt { background: #e4f5ea; color: #1d7a44; }
+.evidence-item blockquote { margin: 0; flex: 1; min-width: 0; color: #435966; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ev-time { color: #9aa9b2; font-size: 10px; }
+.evidence-empty { color: var(--muted); font-size: 11px; margin: 0; }
+
+/* 训练配置 */
+.setup-card { background: white; border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
+.setup-card h3 { font-size: 15px; }
+.setup-note { color: var(--muted); font-size: 12px; margin: 0; }
+.setup-row { display: flex; align-items: center; gap: 12px; }
+.setup-label { font-size: 12px; color: #5d7280; width: 36px; }
+.setup-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.confirm-check { display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--muted); }
+
+/* 训练答题 */
+.practice-head { display: flex; align-items: center; gap: 12px; }
+.practice-progress { color: var(--muted); font-size: 12px; margin-left: auto; }
+.practice-head .text-button:last-child { margin-left: 0; }
+.question-card { border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; background: #fbfdfd; }
+.question-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.question-stem { font-size: 13px; line-height: 1.85; background: white; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.option-list { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.learning-app .option { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; width: 100%; cursor: pointer; background: white; font-size: 13px; line-height: 1.7; }
+.learning-app .option:hover { background: #f2f9f9; }
+.option.option-picked { border-color: var(--teal); background: #f2faf9; }
+.option.option-locked { cursor: default; opacity: .85; }
+.answer-area { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.answer-area textarea { width: 100%; border: 1px solid #d6e1e6; border-radius: 9px; padding: 10px 12px; font: inherit; font-size: 12px; line-height: 1.7; resize: vertical; background: white; }
+.answer-area .primary { align-self: flex-end; }
+.hint-box { background: #fffdf3; border: 1px dashed #e8d9a0; border-radius: 8px; padding: 8px 12px; font-size: 12px; line-height: 1.7; }
+.hint-box p { margin: 4px 0; }
+.assist-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.assist-note { color: var(--muted); font-size: 11px; }
+.redo-row { border-top: 1px dashed var(--line); padding-top: 8px; }
+.dispute-box { display: flex; flex-direction: column; gap: 8px; background: #fbf8f4; border: 1px solid #e7ded2; border-radius: 8px; padding: 10px 12px; }
+.dispute-box textarea { border: 1px solid #d6e1e6; border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 12px; }
+
+.feedback-card { border-radius: 10px; padding: 12px 14px; font-size: 12px; line-height: 1.7; border: 1px solid var(--line); }
+.feedback-card.tone-good { background: #f0faf3; border-color: #cdeacf; }
+.feedback-card.tone-warn { background: #fffaf0; border-color: #f0e2c0; }
+.feedback-card.tone-bad { background: #fdf3f3; border-color: #f0cfcf; }
+.feedback-card.tone-muted { background: #f6f8f9; }
+.feedback-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.feedback-score { font-weight: 700; color: #35545f; }
+.feedback-text { margin: 4px 0; }
+.rubric-list { margin: 4px 0; padding-left: 18px; color: #5d7280; }
+.release-box { border-top: 1px dashed var(--line); margin-top: 8px; padding-top: 8px; }
+.release-box p { margin: 4px 0; }
+
+/* 训练列表 / 结果 */
+.session-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.session-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; background: #fbfdfd; }
+.session-info { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+.session-info span { color: var(--muted); font-size: 11px; }
+.result-summary, .result-kps { display: flex; flex-direction: column; gap: 8px; }
+.result-summary h3, .result-kps h3 { font-size: 14px; }
+.result-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.result-line { color: #435966; font-size: 12px; line-height: 1.8; margin: 0; }
+.result-kp { border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; font-size: 12px; line-height: 1.7; background: #fbfdfd; }
+.result-kp p { margin: 4px 0 0; color: #435966; }
+
+@media (max-width: 900px) {
+  .record-head { display: none; }
+  .record-row { grid-template-columns: 34px minmax(0, 1fr) 70px; grid-auto-rows: auto; }
+  .record-time, .record-count, .record-actions { grid-column: 2 / -1; }
+  .record-row { grid-template-columns: 34px minmax(0, 1fr); row-gap: 6px; }
+  .record-time, .record-count, .state-badge, .record-actions { grid-column: 2; justify-self: start; }
+  .kp-grid { grid-template-columns: 1fr; }
+  .pane-footer { flex-direction: column; align-items: stretch; }
+  .footer-note { text-align: center; }
+}

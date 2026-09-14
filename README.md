@@ -1,6 +1,18 @@
 # AI 解题助手 (AI Math Problem Solver)
 
-基于 Claude Sonnet 4.6 (via AIHubMix) 的智能解题应用，支持文字输入与图片上传，通过三层 AI 管线生成分步解题过程，并能自动生成 Python 图表辅助理解。支持浅色/深色模式切换。
+## 项目成果展示
+
+[20 张功能截图与 PPT 配文](docs/showcase/README.md) · [离线截图目录](docs/showcase/index.html)
+
+![交互学习工作台](docs/showcase/01-交互学习工作台.png)
+
+![历史知识点分析](docs/showcase/06-多知识点薄弱分析总览.png)
+
+![专项训练反馈](docs/showcase/14-定位具体错误与部分得分.png)
+
+截图采用内置示例及人工准备的演示题，解答、分析和训练反馈通过实际接口生成，不代表真实学生成绩。完整素材目录包含 OCR 校正、函数图像、证据追溯、训练配置和结果更新等场景。
+
+基于 DeepSeek V4.1 Flash 的多模态智能解题应用，支持文字输入与图片上传，通过分层处理生成结构化解题步骤，并由前端渲染交互式数学图形。支持浅色/深色模式切换。
 
 ## 技术栈
 
@@ -8,7 +20,7 @@
 |------|------|
 | **前端** | React 18, Axios, Create React App |
 | **后端** | Node.js, Express.js |
-| **AI** | Claude Sonnet 4.6 (via AIHubMix) |
+| **AI** | DeepSeek V4.1 Flash (`deepseek-flash`) |
 | **OCR** | 百度 OCR API |
 | **可视化** | Python + Matplotlib (由后端自动调用) |
 
@@ -16,51 +28,64 @@
 
 ```
 ├── backend/
-│   ├── server.js              # Express 服务入口
+│   ├── server.js              # Express 服务入口（createApp 与启动监听分离，便于测试）
 │   ├── routes/
-│   │   ├── conversations.js   # 对话 CRUD + 消息处理（三层 AI 编排）
-│   │   └── python.js          # Python 代码执行接口
+│   │   ├── conversations.js   # 对话 CRUD + 消息处理（复用共享 repository）
+│   │   └── learning.js        # 学习历史：分析报告 / 专项训练 / 作答 / 任务轮询
+│   ├── repositories/
+│   │   ├── conversationRepository.js  # 全局唯一的内存对话数据源（消息 ID/revision/来源）
+│   │   └── learningRepository.js      # 分析、训练、作答、草稿的内存仓库（TTL + 级联删除）
+│   ├── services/
+│   │   ├── historyEvidenceService.js  # 历史证据规范化、追问抽取、去重、可分析性评估
+│   │   ├── learningAnalysisService.js # 分批知识点提取 → 汇总 → 后端证据规则 → 报告
+│   │   ├── practiceService.js         # 出题、复核、提示/揭晓释放、作答与首答锁
+│   │   ├── gradingService.js          # 规则判题（单选/保守填空）+ 模型批改
+│   │   └── learningJobService.js      # 任务队列：幂等、合并、取消、总截止时间
+│   ├── validators/learningSchemas.js  # 输入与模型输出结构校验
+│   ├── config/knowledgeTaxonomy.js    # 稳定知识点字典（math-v1）
+│   ├── prompts/                       # 分析 / 出题 / 复核 / 批改 提示词
+│   ├── tests/                         # node:test 自动化测试（mock 模型，不访问真实 API）
 │   ├── models/
-│   │   └── Conversation.js    # 对话数据模型 (Mongoose Schema)
-│   ├── utils/
-│   │   ├── llmService.js      # Claude API 调用 + 绘图提示词模板 + JSON 验证
-│   │   └── ocrService.js      # 百度 OCR 文字识别
-│   └── .env                   # 环境变量（API Key 等）
+│   │   └── Conversation.js    # 对话数据模型 (Mongoose Schema，当前运行时未接入)
+│   └── utils/
+│       ├── llmService.js      # DeepSeek 多模态 API 调用 + 绘图提示词模板 + JSON 验证
+│       ├── apiError.js        # 统一业务错误 {error:{code,message,retryable,details}}
+│       └── ocrService.js      # 百度 OCR 文字识别
 ├── frontend/
 │   ├── public/
 │   │   └── index.html
 │   └── src/
-│       ├── App.js             # 主应用组件（含深色模式切换、乐观更新等）
-│       ├── index.js           # React 入口（ThemeContext 注入）
-│       ├── theme.js           # 设计令牌 — 浅色/深色双主题
-│       ├── index.css          # 全局样式
-│       └── components/
-│           ├── Sidebar.js     # 侧边栏（对话列表管理）
-│           ├── ChatArea.js    # 聊天消息展示区（可滚动）
-│           ├── InputArea.js   # 输入区域（文本 + 图片上传）
-│           ├── CodeBlock.js   # 代码块渲染
-│           ├── GeometryViewer.js      # 几何图形查看器
-│           └── Interactive3DViewer.js # 3D 交互查看器
+│       ├── App.js             # 主应用组件（对话状态、结构化来源字段）
+│       ├── api/learningApi.js # /api/learning 客户端与错误归一化
+│       ├── hooks/useLearningJobs.js # 任务轮询（1.5s、失败退避、卸载清理）
+│       ├── components/
+│       │   ├── LearningWorkspace.js    # 学习工作台 + 学习历史视图切换
+│       │   ├── MathMarkdown.js         # 公共数学文本渲染组件
+│       │   ├── history/                # HistoryWorkspace 及记录/报告/训练子组件
+│       │   ├── InputArea.js   # 输入区域（文本 + 图片上传）
+│       │   ├── GeometryViewer.js      # 几何图形查看器
+│       │   └── Interactive3DViewer.js # 3D 交互查看器
+│       └── history.css        # 学习历史视图样式
 ├── start.bat                  # Windows 一键启动脚本
 └── start.ps1                  # PowerShell 一键启动脚本
 ```
 
 ## 核心流程
 
-### 三层 AI 管线
+### 解题管线
 
-当用户发送一条问题消息时，后端依次执行三层调用：
+当用户发送一条问题消息时，后端执行：
 
-1. **第一层 — 生成解题步骤**: 调用 Claude 分析题目，输出结构化解题步骤（JSON）。提示词要求每步包含「目标→依据→计算过程→结果」四段，强制图形类题目优先生成图像，并控制单步描述不超过150字。
-2. **第二层 — 生成绘图代码**: 对需要图像的步骤，调用 Claude 提取绘图参数，生成 Python matplotlib 代码（支持静态图、GIF 动画、3D 图形）。
-3. **第三层 — 合成最终答案**: 收集所有步骤结果，按「先图后文」的格式拼接最终答案。
+1. **步骤拆解**: 调用 DeepSeek V4.1 Flash 分析文字与题目图片，输出结构化解题步骤和绘图数据（JSON），多次校验失败时降级为回显原题（消息标记为 `fallback` 状态）。
+2. **前端渲染**: 前端根据结构化绘图数据渲染 2D 函数或交互式 3D 图形，不再调用第二个模型生成 Python 代码。
+3. **答案合成**: `thirdLayerLLM` 在本地按「先图后文」拼接最终答案，不再额外请求模型。
 
 ### OCR 图片识别流程
 
 用户上传图片后：
 1. 图片上传到后端进行 OCR 识别
 2. 识别结果展示在输入框上方，用户可编辑修改
-3. 用户确认后，OCR 文字与用户输入的文本一同提交给 AI 处理
+3. 用户确认后，原始图片、OCR 文字与用户输入文本一同提交给 DeepSeek 多模态模型处理
 
 ### 提示词设计
 
@@ -94,7 +119,7 @@
 
 ### 图片上传 + OCR
 
-用户可上传题目图片，前端将 Base64 编码发送到后端，后端调用百度 OCR 提取文字，然后与用户输入的文本合并作为 LLM 的输入。
+用户可上传题目图片。后端保留百度 OCR 作为可编辑的文字预览，同时把 Base64 原图与文本一起提交给 DeepSeek V4.1 Flash 进行视觉理解。
 
 ## 特性
 
@@ -138,9 +163,9 @@ cd ..
 
 ```env
 PORT=5000
-LLM_API_URL=https://aihubmix.com/v1/chat/completions
-LLM_API_KEY=你的AIHubMix_API_Key
-LLM_MODEL=claude-sonnet-4-6-1m
+DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions
+DEEPSEEK_API_KEY=你的DeepSeek_API_Key
+DEEPSEEK_MODEL=deepseek-flash
 BAIDU_OCR_API_KEY=你的百度OCR_API_Key
 BAIDU_OCR_SECRET_KEY=你的百度OCR_Secret_Key
 ```
@@ -157,20 +182,100 @@ cd backend && node server.js
 cd frontend && npm start
 ```
 
-4. **打开浏览器访问** `http://localhost:3000`
+4. **打开浏览器访问** `http://localhost:3001`
+
+## 学习历史：薄弱点分析与专项训练
+
+在左侧导航「历史」进入完整学习历史视图，包含三个页签：
+
+### 核心原则
+
+**提问历史 ≠ 错题历史，提问频次 ≠ 不掌握程度。**
+
+- 只有题目主题：展示「涉及的知识点／建议复习」，不断言学生不会。
+- 学生明确表达不理解（追问中含疑问）：展示「疑似薄弱点」并列出原始证据摘录。
+- 收集到学生独立作答后：才展示「训练中出现错误／部分掌握」等真实表现。
+- 不生成「掌握度 37%」这类无依据数值；「支持程度」只描述证据充分性（低/中/高）。
+- AI 解答、服务调用失败、重复提问都不会被当成学生错误；静态示例内容默认排除。
+- 判断由模型提出，但所有统计、优先顺序、支持程度上限由后端按固定规则计算，模型伪造的知识点/证据 ID 会被校验拒绝并触发一次修复。
+
+### 使用流程
+
+1. **历史记录**：按最近 7 天 / 30 天 / 全部筛选（默认 30 天），默认选中最近 20 条可分析记录（可改选，单次最多 50 条），点击「分析所选记录」。
+2. **薄弱点分析**：查看知识点卡片（判断类型、支持程度、优先顺序、原始证据摘录、可跳回原题），勾选 1～3 个知识点生成训练。
+3. **专项训练**：选择题量（3/5）与难度（基础/标准/挑战），逐题作答（单选/填空/简答），可「给我提示」或「直接看答案」（两者都会使本题按辅助练习记录，不计入独立表现）；提交后获得批改反馈，可对存疑批改提出争议、对失败批改重试。
+4. **更新分析**：整组训练完成后出现「有新的训练证据，可更新分析」，点击后用真实作答更新报告。
+
+### 可靠性约定
+
+- **异步任务**：分析、出题、批改均为「创建任务 + 轮询状态」，支持取消、幂等（requestKey/submissionKey）、有限修复重试与 10 分钟总截止。
+- **答案隔离**：标准答案、评分点、完整提示只保存在后端；未作答时所有公开接口不返回答案。
+- **独立性判定**：是否「首次独立作答」由服务端根据提示/揭晓记录与作答顺序判定，客户端无法声明。
+- **级联删除**：删除原对话会删除其分析报告、派生训练与作答并取消相关任务；删除报告/训练也有对应的级联规则。
+- **内存存储**：报告与训练默认保留 7 天、任务记录 24 小时（上限各 200 份），**服务重启后全部清空**；界面已明确提示。
+- **单用户假设**：当前与对话功能一致，无用户隔离；接入多用户前需要为所有 repository 查询增加 owner 校验。
+
+### 运行后端测试
+
+```bash
+cd backend && npm test
+```
+
+测试使用固定 mock 模型输出，不依赖付费接口，覆盖：证据抽取与去重、伪造 ID 拒绝与修复、证据等级/优先顺序规则、判题规则与模型批改、任务幂等/取消/来源变化、接口级完整闭环、并发首答冲突、级联删除等 38 个场景。
 
 ## API 接口
+
+### 对话与 OCR
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/conversations` | 获取所有对话列表 |
-| POST | `/api/conversations` | 创建新对话 |
+| POST | `/api/conversations` | 创建新对话（可传 `source` 标记来源） |
 | GET | `/api/conversations/:id` | 获取指定对话详情 |
-| POST | `/api/conversations/:id/message` | 发送消息（触发三层 AI 管线） |
-| DELETE | `/api/conversations/:id` | 删除对话 |
-| POST | `/api/python/execute` | 执行 Python 代码 |
+| POST | `/api/conversations/:id/message` | 发送消息（支持 `source/kind/studentQuestion/activeStepId` 结构化来源字段） |
+| POST | `/api/conversations/:id/message-stream` | SSE 流式消息 |
+| POST | `/api/conversations/:id/abort` | 停止当前生成 |
+| DELETE | `/api/conversations/:id` | 删除对话（级联删除关联分析与训练） |
+| POST | `/api/ocr` | 图片 OCR 识别 |
+
+### 学习历史（`/api/learning`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/history?from=&to=&cursor=&limit=` | 可分析记录摘要（服务端返回可分析状态与原因） |
+| POST | `/analyses` | 创建分析任务，`202 {jobId}` |
+| GET | `/analyses` / `/analyses/:id` | 报告列表 / 报告详情（含 stale 与 pendingEvidence） |
+| DELETE | `/analyses/:id` | 删除报告并级联删除派生训练 |
+| GET | `/jobs/:id` | 查询任务状态；POST `/jobs/:id/cancel` 取消 |
+| POST | `/practice-sessions` | 创建出题任务，`202 {jobId}` |
+| GET | `/practice-sessions` / `/:id` / `/:id/result` | 训练列表 / 训练详情（不含答案）/ 整组统计 |
+| DELETE | `/practice-sessions/:id` | 删除训练（关联报告标记过期） |
+| PATCH | `/practice-sessions/:id/draft` | 保存作答草稿（版本号防回退） |
+| POST | `/practice-sessions/:id/questions/:qid/hint` | 释放下一条提示（记录辅助行为） |
+| POST | `/practice-sessions/:id/questions/:qid/reveal` | 查看答案（结束该题独立测验机会） |
+| POST | `/practice-sessions/:id/attempts` | 提交作答；规则判题即时返回，模型批改返回 `202 {jobId}` |
+| GET | `/attempts/:id` | 批改状态与反馈（批改完成或揭晓后附答案） |
+| POST | `/attempts/:id/retry-grading` | 重试失败批改（复用同一次作答） |
+| POST | `/attempts/:id/dispute` | 标记批改争议（排除该项确认成绩） |
+
+错误统一为 `{error:{code,message,retryable,details}}`，覆盖 `INVALID_INPUT`、`NOT_FOUND`、`SOURCE_CHANGED`、`IDEMPOTENCY_CONFLICT`、`ATTEMPT_IN_PROGRESS`、`INSUFFICIENT_DATA`、`CAPACITY_LIMIT`、`LLM_INVALID_OUTPUT` 等。
 
 ## 更新记录
+
+### 2026-09-11（学习历史与专项训练）
+
+- **学习历史视图**: 「历史」入口由窄抽屉扩展为完整视图（历史记录 / 薄弱点分析 / 专项训练三个页签），保留原记录查看与删除能力，支持按最近 7/30 天/全部筛选、默认选中最近 20 条可分析记录。
+- **薄弱点分析**: 基于所选历史记录分批提取知识点与困难线索，汇总为带原始证据引用的分析报告；后端强制执行「提问 ≠ 做错」的证据规则（assessment 降级、支持程度上限、透明优先顺序），并支持指纹缓存复用与 forceRefresh。
+- **专项训练**: 围绕知识点出题（3/5 题、三档难度）+ 独立模型复核；单选/填空规则判题、简答模型批改（按评分点求和，可返回 uncertain）；提示渐进释放、答案揭晓、草稿防抖保存、争议标记与批改重试。
+- **数据基础**: 抽取全局 `conversationRepository`（消息补齐 `_id/kind/status/metadata`、对话 `revision/source`，同步与 SSE 两个入口统一写入）；新增学习功能内存仓库、任务服务（幂等/合并/取消/截止）与统一错误约定。
+- **工程化**: server.js 拆分 `createApp()` 便于测试；新增 `node:test` 自动化测试 38 例（mock 模型，不访问真实 API）并补充 `npm test`；`llmService.callLLMStructured` 向下兼容扩展 `signal/timeoutMs/temperature/taskType` 选项，学习类调用不再输出正文日志。
+- **已知限制**: 报告/训练/作答为内存存储（默认 7 天 TTL、上限 200 份），重启即清空；无多用户隔离；未接入向量检索与长期统计。
+
+### 2026-09-11
+- **模型统一**: 文本、标题和视觉理解统一切换至 DeepSeek V4.1 Flash（`deepseek-flash`），移除运行时 AIHubMix 依赖
+- **多模态接入**: 上传题目图片时，将原始图片以 OpenAI 兼容的 `image_url` 内容块传给 DeepSeek
+- **配置统一**: 环境变量统一为 `DEEPSEEK_API_URL`、`DEEPSEEK_API_KEY` 和 `DEEPSEEK_MODEL`
+- **结构化输出修复**: 解题步骤与绘图参数关闭额外思考输出、启用 JSON 输出约束并提高正文额度，避免复杂图片题退化为复制原题
 
 ### 2026-06-13
 - **`\n` 换行修复**: `tryExtractJSON` 中反斜杠保护不再覆盖 `\n` 转义，同时在 `renderContent` 中将字面 `\n` 转为实际换行
@@ -199,8 +304,9 @@ cd frontend && npm start
 
 ## 注意事项
 
-- 当前对话数据存储在内存中，重启后端后数据会丢失。如需持久化，可将 MongoDB 连接配置到 `backend/.env` 中的 `MONGODB_URI`。
+- 当前对话、分析报告、训练与作答数据都存储在**后端内存**中，重启后端后数据会丢失。如需持久化，需要真正接入数据库（添加连接、repository 实现、Schema 与迁移，处理现有 `conv_*` 字符串 ID），仅在 `.env` 配置 `MONGODB_URI` 不会自动启用数据库。
+- 标准答案与评分点只保存在服务端；学习历史功能遵循与主应用一致的单用户假设，未提供多用户隔离。
 - Python 绘图生成的图片保存为 `/tmp/figure.png` 或 `/tmp/animation.gif`，Windows 下会自动转换为 `backend/tmp/` 目录。
-- Claude API 调用超时设置为 180 秒，Python 执行超时设置为 90 秒。
-- Claude 第一层 JSON 解析含自动重试机制，最多重试 2 次。
+- DeepSeek API 调用超时设置为 180 秒；学习类任务另有 10 分钟总截止与全局并发上限（默认 2，可通过 `LEARNING_MAX_CONCURRENT` 等环境变量调整）。
+- DeepSeek 第一层 JSON 解析含自动重试机制，最多重试 2 次。
 - **安全提醒**: 请勿将包含真实 API Key 的 `.env` 文件提交到公开仓库。

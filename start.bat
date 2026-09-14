@@ -77,7 +77,7 @@ echo        Backend launched.
 echo.
 
 :: Start frontend
-echo [5/5] Starting frontend (port 3000)...
+echo [5/5] Starting frontend (port 3001)...
 start "AI-Frontend" cmd /k "cd /d %ROOT%frontend && npx react-scripts start"
 echo        Frontend launched.
 echo.
@@ -85,7 +85,7 @@ echo.
 echo ===============================================
 echo   All services started!
 echo.
-echo   Frontend: http://localhost:3000
+echo   Frontend: http://localhost:3001
 echo   Backend:  http://localhost:5000
 echo.
 echo   Keep the two popup windows open.

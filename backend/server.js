@@ -4,30 +4,7 @@ const { execSync } = require('child_process');
 require('dotenv').config();
 
 const conversationRoutes = require('./routes/conversations');
-
-const app = express();
-const PORT = process.env.PORT || 5000;
-
-app.timeout = 180000;
-
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true }));
-
-app.use('/api/conversations', conversationRoutes);
-
-// OCR-only endpoint
-const OCRService = require('./utils/ocrService');
-app.post('/api/ocr', async (req, res) => {
-  try {
-    const { imageBase64 } = req.body;
-    if (!imageBase64) return res.status(400).json({ error: 'No image provided' });
-    const text = await OCRService.recognizeText(imageBase64);
-    res.json({ text });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+const learningRoutes = require('./routes/learning');
 
 // ==================== 环境检测函数 ====================
 function runChecks() {
@@ -113,16 +90,15 @@ function runChecks() {
     fix: '在终端中运行：pip install sympy（数学符号计算与 LaTeX 输出，可选）',
   });
 
-  // 6. AI API Key (AIHubMix / DeepSeek)
-  const aiHubMixKey = process.env.AIHUBMIX_API_KEY || '';
+  // 6. DeepSeek API configuration
   const deepseekKey = process.env.DEEPSEEK_API_KEY || '';
-  const apiKeyOk = (aiHubMixKey.length > 10 && aiHubMixKey.startsWith('sk-'))
-    || (deepseekKey.length > 10 && deepseekKey.startsWith('sk-'));
+  const deepseekModel = process.env.DEEPSEEK_MODEL || 'deepseek-flash';
+  const apiKeyOk = deepseekKey.length > 10 && deepseekKey.startsWith('sk-');
   checks.push({
-    name: 'AI API Key (AIHubMix/DeepSeek)',
+    name: 'DeepSeek API',
     ok: apiKeyOk,
-    detail: apiKeyOk ? 'Configured' : 'Not configured or invalid format',
-    fix: 'Set AIHUBMIX_API_KEY=your-key in backend/.env\nGet your key: https://aihubmix.com/token',
+    detail: apiKeyOk ? `Configured (${deepseekModel})` : 'Not configured or invalid format',
+    fix: '在 backend/.env 中设置 DEEPSEEK_API_KEY 和 DEEPSEEK_MODEL=deepseek-flash',
   });
 
   // 7. Baidu OCR API Key
@@ -144,28 +120,61 @@ function runChecks() {
   };
 }
 
-// ==================== Health 端点（环境检测） ====================
-app.get('/api/health', (_req, res) => {
-  const result = runChecks();
-  const statusCode = result.allOk ? 200 : 200; // 始终返回200，让前端解析
-  res.status(statusCode).json(result);
-});
+// app 创建与启动监听分离：集成测试直接使用 createApp()，不触发 Python 环境检查。
+function createApp() {
+  const app = express();
+  app.timeout = 180000;
 
-app.get('/', (req, res) => {
-  res.json({ message: 'DeepSeek Chat API is running' });
-});
+  app.use(cors());
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ extended: true }));
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Server timeout: ${app.timeout / 1000} seconds`);
+  app.use('/api/conversations', conversationRoutes);
+  app.use('/api/learning', learningRoutes);
 
-  const status = runChecks();
-  console.log('\n========== 环境检测 ==========');
-  status.checks.forEach(c => {
-    const icon = c.ok ? '✓' : '✗';
-    console.log(`  ${icon} ${c.name}: ${c.detail}`);
-    if (!c.ok) console.log(`    → ${c.fix}`);
+  // OCR-only endpoint
+  const OCRService = require('./utils/ocrService');
+  app.post('/api/ocr', async (req, res) => {
+    try {
+      const { imageBase64 } = req.body;
+      if (!imageBase64) return res.status(400).json({ error: 'No image provided' });
+      const text = await OCRService.recognizeText(imageBase64);
+      res.json({ text });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
-  console.log(status.allOk ? '\n✓ 所有依赖就绪，系统正常运行' : '\n✗ 存在缺失依赖，请按上述提示修复');
-  console.log('================================\n');
-});
+
+  // ==================== Health 端点（环境检测） ====================
+  app.get('/api/health', (_req, res) => {
+    const result = runChecks();
+    res.status(200).json(result);
+  });
+
+  app.get('/', (req, res) => {
+    res.json({ message: 'DeepSeek Chat API is running' });
+  });
+
+  return app;
+}
+
+if (require.main === module) {
+  const PORT = process.env.PORT || 5000;
+  const app = createApp();
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Server timeout: ${app.timeout / 1000} seconds`);
+
+    const status = runChecks();
+    console.log('\n========== 环境检测 ==========');
+    status.checks.forEach((c) => {
+      const icon = c.ok ? '✓' : '✗';
+      console.log(`  ${icon} ${c.name}: ${c.detail}`);
+      if (!c.ok) console.log(`    → ${c.fix}`);
+    });
+    console.log(status.allOk ? '\n✓ 所有依赖就绪，系统正常运行' : '\n✗ 存在缺失依赖，请按上述提示修复');
+    console.log('================================\n');
+  });
+}
+
+module.exports = { createApp, runChecks };

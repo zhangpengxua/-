@@ -78,7 +78,7 @@ Write-Host ""
 Write-Host "===============================================" -ForegroundColor Cyan
 Write-Host "服务启动完成！" -ForegroundColor Green
 Write-Host ""
-Write-Host "前端地址: http://localhost:3000" -ForegroundColor White
+Write-Host "前端地址: http://localhost:3001" -ForegroundColor White
 Write-Host "后端地址: http://localhost:5000" -ForegroundColor White
 Write-Host ""
 Read-Host "按任意键关闭此窗口..."
