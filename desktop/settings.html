@@ -1,0 +1,11 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'self'"><title>连接 AI · EL学习助手</title>
+<style>body{font:15px system-ui;background:#f5f8f8;color:#29494e;margin:0;padding:32px}h1{font-size:26px}p{color:#668185;line-height:1.7}label{display:block;margin:16px 0 6px}input{box-sizing:border-box;width:100%;padding:10px;border:1px solid #cbdcdd;border-radius:7px;font:inherit}button{background:#157f88;color:white;border:0;border-radius:7px;padding:12px 24px;margin-top:20px;font:inherit}small{color:#6c8588}#status{color:#966526}</style>
+<h1>连接你的 AI 学习助手</h1><p>填写一次即可在本机记住。密钥加密保存在当前 Windows 用户目录，不会打包进程序。</p>
+<form id="settings">
+<label for="key">DeepSeek API 密钥</label><input id="key" type="password" autocomplete="off" placeholder="sk-…">
+<label for="model">模型名称</label><input id="model" value="deepseek-flash" required>
+<label for="url">API 地址</label><input id="url" value="https://api.deepseek.com/chat/completions" type="url" required>
+<label for="ocrKey">百度 OCR API Key（图片识别，可选）</label><input id="ocrKey" type="password" autocomplete="off">
+<label for="ocrSecret">百度 OCR Secret Key（可选）</label><input id="ocrSecret" type="password" autocomplete="off">
+<p><small>已有密钥时，留空表示保留。关闭程序后，当前版本的题目、报告与训练记录会清空。</small></p>
+<button type="submit">保存并打开工作台</button> <button id="preview" type="button">先体验示例</button><p id="status" role="status"></p></form><script src="settings.js"></script></html>

@@ -215,6 +215,7 @@ export default function PracticeSession({ session, onSessionUpdate, onBackToList
   if (!question) return <div className="pane-empty"><h3>训练组为空</h3></div>;
   const attempt = attemptOf(question);
   const revealed = revealedOf(question);
+  const answerRelease = attempt?.answerRelease || revealedInfo[question.id] || question.answerRelease;
   const canRedo = attempt?.status === 'graded' && redoIds.has(question.id);
   const locked = Boolean(attempt && attempt.status !== 'grading_failed' && !canRedo);
   const inFlight = busyQuestionId === question.id || (question.hasInFlightGrading && attempt?.status === 'grading');
@@ -234,7 +235,7 @@ export default function PracticeSession({ session, onSessionUpdate, onBackToList
         <header className="question-head">
           <span className="badge">{QUESTION_TYPE_LABELS[question.type]}</span>
           {question.knowledgePointIds.map((id) => <span className="chip-sm" key={id}>{id}</span>)}
-          {question.revealed && <span className="badge tone-warn">已揭晓</span>}
+          {revealed && <span className="badge tone-warn">已揭晓</span>}
         </header>
         <div className="question-stem"><MathMarkdown>{question.stem}</MathMarkdown></div>
 
@@ -306,10 +307,16 @@ export default function PracticeSession({ session, onSessionUpdate, onBackToList
           </div>
         )}
 
+        {revealed && answerRelease && !(attempt?.status === 'graded' && attempt.result) && (
+          <section className="feedback-card" aria-label="已揭晓的答案">
+            <p className="assist-note">已查看答案，后续作答按辅助练习记录，不计入独立表现。</p>
+            <AnswerRelease release={answerRelease} />
+          </section>
+        )}
         {attempt && attempt.status === 'graded' && attempt.result && (
           <FeedbackCard
             attempt={attempt}
-            release={attempt.answerRelease || revealedInfo[question.id]}
+            release={answerRelease}
             onDispute={() => { setDisputeTarget(attempt.id); }}
           />
         )}
@@ -366,19 +373,24 @@ function FeedbackCard({ attempt, release, onDispute }) {
           ))}
         </ul>
       )}
-      {release && (
-        <div className="release-box">
-          <p><strong>标准答案：</strong><MathMarkdown>{release.canonical}</MathMarkdown></p>
-          <p><strong>解析：</strong></p>
-          <MathMarkdown>{release.explanation}</MathMarkdown>
-        </div>
-      )}
+      {release && <AnswerRelease release={release} />}
       {attempt.result.verdict === 'uncertain' && attempt.result.uncertaintyReason && (
         <p className="kp-rule-note">判定存疑原因：{attempt.result.uncertaintyReason}</p>
       )}
       {!attempt.disputed && (
         <button className="text-button" onClick={onDispute}>我认为批改有误</button>
       )}
+    </div>
+  );
+}
+
+function AnswerRelease({ release }) {
+  return (
+    <div className="release-box">
+      <p><strong>标准答案：</strong></p>
+      <MathMarkdown>{release.canonical}</MathMarkdown>
+      <p><strong>解析：</strong></p>
+      <MathMarkdown>{release.explanation}</MathMarkdown>
     </div>
   );
 }

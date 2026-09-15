@@ -16,7 +16,6 @@ const MATH_MARKER_RE = new RegExp(
   ].join('|'),
   'i'
 );
-const NON_MATH_MARKER_RE = /(英语|作文|语文|阅读理解|完形填空|背诵|默写|单词|翻译|古文)/;
 const CONFUSION_RE = /(为什么|为啥|怎么|不会|不懂|不明白|没看懂|看不懂|不清楚|困惑|搞混|混淆|弄混|分不清|理解错|想不通|到底|区别|什么意思|含义|讲解|讲讲|解释)/;
 const FIGURE_REF_RE = /(如图|见图|如下图|如图所示)/;
 const OCR_MARKER = '图片识别文字：';
@@ -91,7 +90,6 @@ function assessConversation(conv) {
   if (!stem) return { analyzable: false, reason: 'no_usable_text' };
   if (stemFingerprint(stem) === stemFingerprint(DEMO_EXAMPLE)) return { analyzable: false, reason: 'demo_source' };
   if (stem.length > 8000) return { analyzable: false, reason: 'too_long' };
-  if (NON_MATH_MARKER_RE.test(stem) && !MATH_MARKER_RE.test(stem)) return { analyzable: false, reason: 'non_math' };
   return { analyzable: true, reason: 'ok', warnings };
 }
 
@@ -256,7 +254,6 @@ function buildAttemptEvidence(attemptRows, existingEvidence, startSeq) {
 module.exports = {
   DEMO_EXAMPLE,
   MATH_MARKER_RE,
-  NON_MATH_MARKER_RE,
   normalizeText,
   stemFingerprint,
   sha256,

@@ -32,6 +32,7 @@ function parseModelJson(raw) {
 // 配额分配：每个所选知识点至少 1 题，余量依次补足。
 function allocateQuota(knowledgePointIds, count) {
   const n = knowledgePointIds.length;
+  if (!n) throw new ApiError('INVALID_INPUT', '出题至少需要一个知识点');
   const base = Math.floor(count / n);
   const quota = knowledgePointIds.map(() => base);
   let remaining = count - base * n;
@@ -66,7 +67,7 @@ async function generateCandidates(ctx, payload) {
   const messages = [{
     role: 'user',
     content: JSON.stringify({
-      knowledgePoints: payload.kps.map((k) => ({ id: k.id, name: k.name, path: k.path, difficultyFocus: k.difficultyFocus, trainingGoal: k.trainingGoal })),
+      knowledgePoints: payload.kps.map((k) => ({ id: k.id, name: k.name, path: k.path, definition: k.definition, boundary: k.boundary, difficultyFocus: k.difficultyFocus, trainingGoal: k.trainingGoal })),
       quota: payload.quota,
       totalCount: payload.totalCount,
       difficulty: difficultyDescription(payload.difficulty),
@@ -106,6 +107,7 @@ async function reviewCandidates(ctx, candidates) {
       questions: candidates.map((q, index) => ({
         index,
         knowledgePointId: q.knowledgePointId,
+        knowledgePoint: taxonomy.getPoint(q.knowledgePointId),
         type: q.type,
         stem: q.stem,
         options: q.options,
@@ -151,7 +153,8 @@ async function runGeneration(ctx, params) {
     if (!taxonomy.isValidId(id)) throw new ApiError('INVALID_INPUT', `未知的知识点 ID：${id}`);
     const kp = analysis.knowledgePoints.find((k) => k.id === id);
     if (!kp) throw new ApiError('INVALID_INPUT', `知识点 ${id} 不在当前分析结果中`);
-    kps.push({ id, name: kp.name, path: kp.path, difficultyFocus: kp.reason, trainingGoal: kp.trainingGoal });
+    const meta = taxonomy.getPoint(id);
+    kps.push({ id, name: meta.name, path: meta.path, definition: meta.definition, boundary: meta.boundary, difficultyFocus: kp.reason, trainingGoal: kp.trainingGoal });
   }
   const quota = allocateQuota(params.knowledgePointIds, params.questionCount);
 
@@ -174,12 +177,18 @@ async function runGeneration(ctx, params) {
     // 最多补生成一次；仍不足则整组失败，不伪装成功。
     ctx.setStage('generating');
     const deficit = params.questionCount - passed.length;
+    const missingQuota = params.knowledgePointIds.map((id, i) =>
+      Math.max(0, quota[i] - passed.filter((q) => q.knowledgePointId === id).length));
+    const retryIds = params.knowledgePointIds.filter((id, i) => missingQuota[i] > 0);
     const retryPayload = {
       ...payload,
       totalCount: deficit,
-      knowledgePointIds: [...new Set(passed.concat(firstRound.questions).map((q) => q.knowledgePointId))],
+      kps: kps.filter((kp) => retryIds.includes(kp.id)),
+      knowledgePointIds: retryIds,
+      quota: missingQuota.filter((n) => n > 0),
+      historyStemSet: new Set([...historyStemSet, ...passed.map((q) => evidenceService.stemFingerprint(q.stem))]),
     };
-    const secondRound = await generateCandidates(ctx, { ...retryPayload, quota: allocateQuota(retryPayload.knowledgePointIds, deficit) });
+    const secondRound = await generateCandidates(ctx, retryPayload);
     ctx.setStage('reviewing');
     const review2 = await reviewCandidates(ctx, secondRound.questions);
     const passed2 = secondRound.questions.filter((_, i) => review2.get(i)?.status === 'passed');

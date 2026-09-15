@@ -25,7 +25,6 @@ export const ANALYZABLE_REASONS = {
   demo_source: '示例内容',
   no_usable_text: '仅图片无文字',
   too_long: '题干超长',
-  non_math: '暂不支持学科',
 };
 
 export const VERDICT_LABELS = {
@@ -45,6 +44,7 @@ export const EVIDENCE_KIND_LABELS = {
 export const STAGE_LABELS = {
   reading: '正在整理记录…',
   extracting: '正在识别知识点…',
+  classifying: '正在对齐已有知识点并归类…',
   summarizing: '正在汇总分析…',
   saving: '正在保存结果…',
   generating: '正在生成题目…',

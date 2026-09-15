@@ -1,5 +1,5 @@
 const axios = require('axios');
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const DEEPSEEK_API_URL = process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/chat/completions';
@@ -234,7 +234,8 @@ class LLMService {
       const functions = Array.isArray(dd.functions) ? dd.functions : [];
       const text = (step.description || '') + JSON.stringify(dd);
 
-      if (planes.length === 0 && functions.length === 0) {
+      const pointExploration = dd.interaction?.bindings?.some(b=>typeof b.path === 'string' && b.path.startsWith('points.')) && !/圆锥|圆台|圆柱|棱锥|棱柱|球体|立方体/.test(step.description || '');
+      if (planes.length === 0 && functions.length === 0 && !pointExploration) {
         issues.push(`步骤${step.id}：立体几何不能只输出点线，必须填写 planes（平面外表面）和/或 functions（曲面外表面）`);
       }
 
@@ -286,6 +287,7 @@ class LLMService {
   // ==================== 第一层：拆解题步骤 + 提取结构化数据 ====================
   static async firstLayerLLM(context, userInput, imageBase64 = null) {
     const systemPrompt = [
+      require('fs').readFileSync(require('path').join(__dirname, '../prompts/interactive-scene.txt'), 'utf8'),
       '你是一位资深理科教师。给出详尽、准确、无幻觉的解题过程。',
       '',
       '## 🔹 题目类型分类（第一步：判定题型）',
@@ -457,6 +459,22 @@ class LLMService {
           messages.push({ role: 'user', content: surfaceCheck.retryMessage });
           continue;
         }
+      }
+      const interactionIssues = [];
+      if (/(截面.*(变化|移动|高度)|动点|滑块|拖动|参数.*变化)/.test(userInput) && fixed.steps.some(s=>s.needImage) && !fixed.steps.some(s=>s.drawingData?.interaction)) {
+        interactionIssues.push('题目要求动态探索，请在相关配图步骤补充 interaction 参数、绑定和指标');
+      }
+      for (const step of fixed.steps) {
+        try { require('../../frontend/src/utils/parameterScene.mjs').prepareScene(step.drawingData); }
+        catch (e) { interactionIssues.push(`步骤${step.id}: ${e.message}`); }
+      }
+      if (interactionIssues.length) {
+        if (attempt < MAX_RETRIES) {
+          messages.push({role:'assistant',content:result},{role:'user',content:`请修复交互关系并返回完整JSON：${interactionIssues.join('；')}`});
+          continue;
+        }
+        // Preserve the valid static scene; the UI reports unavailable interaction.
+        for (const step of fixed.steps) if (step.drawingData) step.drawingData.interactionError = '交互关系校验未通过';
       }
       return fixed;
     }

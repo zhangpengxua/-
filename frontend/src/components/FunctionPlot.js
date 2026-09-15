@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { create, all } from 'mathjs';
 import { latexToMathJS } from '../utils/latexToMathJS';
 
@@ -22,8 +22,12 @@ function compileExpr(expr) {
   }
 }
 
-const FunctionPlot = React.memo(({ drawingData, width = 600, height = 400 }) => {
+const FunctionPlot = React.memo(({ drawingData, width = 600, height: availableHeight = 400, onAsk }) => {
+  const height = Math.max(160, availableHeight - 106);
   const canvasRef = useRef(null);
+  const [hidden,setHidden]=useState([]);
+  const [cursor,setCursor]=useState(null);
+  useEffect(()=>{setHidden([]);setCursor(null);},[drawingData]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -37,11 +41,12 @@ const FunctionPlot = React.memo(({ drawingData, width = 600, height = 400 }) => 
     ctx.scale(dpr, dpr);
 
     const { functions, points, xRange, yRange } = drawingData;
-    const xMin = (xRange && xRange[0]) || -5;
-    const xMax = (xRange && xRange[1]) || 5;
-    const yMin = (yRange && yRange[0]) || -5;
-    const yMax = (yRange && yRange[1]) || 5;
+    const xMin = xRange?.[0] ?? -5;
+    const xMax = xRange?.[1] ?? 5;
+    const yMin = yRange?.[0] ?? -5;
+    const yMax = yRange?.[1] ?? 5;
 
+    if (![xMin,xMax,yMin,yMax].every(Number.isFinite) || xMax<=xMin || yMax<=yMin) return;
     const pad = { top: 30, right: 30, bottom: 40, left: 50 };
     const plotW = width - pad.left - pad.right;
     const plotH = height - pad.top - pad.bottom;
@@ -50,15 +55,15 @@ const FunctionPlot = React.memo(({ drawingData, width = 600, height = 400 }) => 
     const toY = (y) => pad.top + (yMax - y) / (yMax - yMin) * plotH;
 
     // 背景
-    ctx.fillStyle = '#1a1a2e';
+    ctx.fillStyle = '#f5f8f8';
     ctx.fillRect(0, 0, width, height);
 
     // 绘图区背景
-    ctx.fillStyle = '#16213e';
+    ctx.fillStyle = '#ffffff';
     ctx.fillRect(pad.left, pad.top, plotW, plotH);
 
     // 网格
-    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.strokeStyle = '#e5edef';
     ctx.lineWidth = 0.5;
     const xStep = (xMax - xMin) / 10;
     const yStep = (yMax - yMin) / 10;
@@ -78,7 +83,7 @@ const FunctionPlot = React.memo(({ drawingData, width = 600, height = 400 }) => 
     }
 
     // 坐标轴
-    ctx.strokeStyle = '#aaa';
+    ctx.strokeStyle = '#8aa1aa';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     const zeroX = toX(0);
@@ -94,7 +99,7 @@ const FunctionPlot = React.memo(({ drawingData, width = 600, height = 400 }) => 
     ctx.stroke();
 
     // 刻度标签
-    ctx.fillStyle = '#888';
+    ctx.fillStyle = '#708792';
     ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
     for (let x = Math.ceil(xMin / xStep) * xStep; x <= xMax; x += xStep) {
@@ -107,7 +112,7 @@ const FunctionPlot = React.memo(({ drawingData, width = 600, height = 400 }) => 
 
     // 绘制函数曲线
     const funcs = functions || [];
-    const colors = ['#4fc3f7', '#ff8a65', '#81c784', '#ffd54f', '#ce93d8', '#ef5350'];
+    const colors = ['#087f8c', '#b88728', '#697bb0', '#699766', '#b47889', '#b98654'];
     const N = 800;
 
     ctx.save();
@@ -116,6 +121,7 @@ const FunctionPlot = React.memo(({ drawingData, width = 600, height = 400 }) => 
     ctx.clip();
 
     funcs.forEach((func, idx) => {
+      if(hidden.includes(idx)) return;
       const compiled = parseAndCompile(func.expr);
       if (!compiled) return;
 
@@ -161,34 +167,18 @@ const FunctionPlot = React.memo(({ drawingData, width = 600, height = 400 }) => 
       points.forEach((p) => {
         const px = toX(p.x);
         const py = toY(p.y);
-        ctx.fillStyle = '#ff5252';
+        ctx.fillStyle = '#d39b32';
         ctx.beginPath();
         ctx.arc(px, py, 5, 0, 2 * Math.PI);
         ctx.fill();
-        ctx.fillStyle = '#fff';
+        ctx.fillStyle = '#35545f';
         ctx.font = 'bold 12px sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText(p.name || '', px, py - 10);
       });
     }
 
-    // 图例
-    if (funcs.length > 0) {
-      ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      const legendH = funcs.length * 20 + 10;
-      ctx.fillRect(pad.left + 10, pad.top + 10, 140, legendH);
-      ctx.font = '12px sans-serif';
-      funcs.forEach((func, idx) => {
-        const color = func.color || colors[idx % colors.length];
-        const label = func.label || func.expr;
-        ctx.fillStyle = color;
-        ctx.fillRect(pad.left + 18, pad.top + 20 + idx * 20, 20, 3);
-        ctx.fillStyle = '#fff';
-        ctx.textAlign = 'left';
-        ctx.fillText(label, pad.left + 44, pad.top + 26 + idx * 20);
-      });
-    }
-  }, [drawingData, width, height]);
+  }, [drawingData, width, height, hidden]);
 
   useEffect(() => {
     draw();
@@ -197,11 +187,15 @@ const FunctionPlot = React.memo(({ drawingData, width = 600, height = 400 }) => 
   if (!drawingData) return null;
 
   return (
-    <div style={{ marginBottom: 12, textAlign: 'center' }}>
+    <div className="generated-plot">
+      <div className="generated-scene-toolbar"><span>点击切换曲线</span>{(drawingData.functions||[]).map((f,i)=><button key={i} aria-pressed={!hidden.includes(i)} onClick={()=>setHidden(prev=>prev.includes(i)?prev.filter(n=>n!==i):[...prev,i])}>{f.label||f.name||f.expr}</button>)}</div>
       <canvas
         ref={canvasRef}
-        style={{ maxWidth: '100%', borderRadius: 12, boxShadow: '0 4px 20px rgba(0,0,0,0.3)' }}
+        aria-label="交互函数图像"
+        onPointerMove={e=>{const r=e.currentTarget.getBoundingClientRect();const px=(e.clientX-r.left)/r.width*width,py=(e.clientY-r.top)/r.height*height;if(px<50||px>width-30||py<30||py>height-40){setCursor(null);return;}const xr=drawingData.xRange||[-5,5],yr=drawingData.yRange||[-5,5];setCursor({x:xr[0]+(px-50)/(width-80)*(xr[1]-xr[0]),y:yr[1]-(py-30)/(height-70)*(yr[1]-yr[0])});}}
+        style={{ maxWidth: '100%', display:'block', cursor:'crosshair' }}
       />
+      <div className="generated-scene-footer">{cursor ? <><span>光标坐标 ({cursor.x.toFixed(2)}, {cursor.y.toFixed(2)})</span>{onAsk&&<button onClick={()=>onAsk(`请解释当前函数图像在 (${cursor.x.toFixed(2)}, ${cursor.y.toFixed(2)}) 附近的变化。`)}>针对这里追问</button>}</> : <span>移动鼠标查看坐标 · 点击曲线名称对比观察</span>}</div>
     </div>
   );
 });

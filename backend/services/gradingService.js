@@ -63,7 +63,7 @@ function ruleGrade(question, answer) {
       uncertain: false,
     };
   }
-  if (question.type === 'fill_blank') {
+  if (question.type === 'fill_blank' && question.knowledgePointIds.every((id) => id.startsWith('math.'))) {
     const candidates = [question.privateAnswer.canonical, ...(question.privateAnswer.acceptedVariants || [])];
     if (fillMatches(answer, candidates)) {
       return {
@@ -106,6 +106,7 @@ async function modelGrade(question, attempt, ctx) {
         stem: question.stem,
         options: question.type === 'single_choice' ? question.options : undefined,
         knowledgePointIds: question.knowledgePointIds,
+        knowledgePoints: question.knowledgePointIds.map((id) => require('../config/knowledgeTaxonomy').getPoint(id)),
       },
       canonical: pa.canonical,
       acceptedVariants: pa.acceptedVariants || [],

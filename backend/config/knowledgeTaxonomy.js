@@ -1,8 +1,4 @@
-// 稳定知识点字典（首版 math-v1）。
-// 模型只能引用这里的 ID；未覆盖内容输出 unmappedTopics 候选名称，由后端标记“暂未归类”，
-// 不进入稳定统计与训练映射。可借鉴 firstLayerLLM 题型列表扩展，但题型 ≠ 知识点。
-const TAXONOMY_VERSION = 'math-v1';
-
+// 预置数学知识点与 AI 扩展分类共用持久知识点库。题型不参与知识点身份。
 const KNOWLEDGE_POINTS = [
   // 基础代数
   { id: 'math.algebra.fraction_operations', name: '分式与分式运算', path: ['数学', '代数', '分式'], aliases: ['分式', '通分', '约分', '分式化简'] },
@@ -49,38 +45,8 @@ const KNOWLEDGE_POINTS = [
   { id: 'math.general.problem_reading', name: '题意理解与条件转化', path: ['数学', '通用', '审题'], aliases: ['审题', '条件转化', '题意理解'] },
 ];
 
-const byId = new Map(KNOWLEDGE_POINTS.map((p) => [p.id, p]));
-const byName = new Map();
-for (const p of KNOWLEDGE_POINTS) {
-  byName.set(p.name, p);
-  for (const alias of p.aliases) {
-    if (!byName.has(alias)) byName.set(alias, p);
-  }
-}
-
-function isValidId(id) {
-  return typeof id === 'string' && byId.has(id);
-}
-
-function getPoint(id) {
-  return byId.get(id) || null;
-}
-
-// 精确名称/别名匹配，用于把历史材料中的自由词映射到稳定 ID（不保证命中）。
-function findByName(name) {
-  if (typeof name !== 'string') return null;
-  return byName.get(name.trim()) || null;
-}
-
-function listForPrompt() {
-  return KNOWLEDGE_POINTS.map((p) => ({ id: p.id, name: p.name, path: p.path }));
-}
-
-module.exports = {
-  version: TAXONOMY_VERSION,
-  points: KNOWLEDGE_POINTS,
-  isValidId,
-  getPoint,
-  findByName,
-  listForPrompt,
-};
+const path = require('path');
+const { createRegistry } = require('../repositories/knowledgeRegistry');
+const storagePath = process.env.KNOWLEDGE_REGISTRY_PATH ||
+  (process.env.NODE_TEST_CONTEXT ? null : path.join(__dirname, '..', 'data', 'knowledge-registry.json'));
+module.exports = createRegistry(KNOWLEDGE_POINTS, storagePath);

@@ -177,9 +177,32 @@ router.post('/:id/message-stream', async (req, res) => {
   let convId = '';
 
   const sendSSE = (event, data) => {
-    if (res.destroyed) return;
-    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    if (res.destroyed || res.writableEnded) return;
+    try {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      // 强制刷新缓冲区，确保数据立即发送到前端
+      if (typeof res.flush === 'function') {
+        res.flush();
+      } else if (res.writeHead && res.socket && res.socket.writable) {
+        // 兼容 Express 4.x — 使用 res.socket.unref 或简单的 noop
+      }
+    } catch (e) {
+      console.error('[SSE write error]', e.message);
+    }
   };
+
+  // 发送心跳包保持连接
+  const heartbeatInterval = setInterval(() => {
+    if (res.destroyed || res.writableEnded) {
+      clearInterval(heartbeatInterval);
+      return;
+    }
+    try {
+      res.write(': heartbeat\n\n');
+    } catch (e) {
+      clearInterval(heartbeatInterval);
+    }
+  }, 15000);
 
   try {
     const { content, imageBase64 } = req.body;
@@ -203,7 +226,10 @@ router.post('/:id/message-stream', async (req, res) => {
     console.log('[SSE] user content:', content?.substring(0, 200));
 
     activeRequests[convId] = { abort: false };
-    req.on('close', () => { if (activeRequests[convId]) activeRequests[convId].abort = true; });
+    req.on('close', () => {
+      clearInterval(heartbeatInterval);
+      if (activeRequests[convId]) activeRequests[convId].abort = true;
+    });
 
     let finalAnswer = null, stepResults = [], llmFailed = false;
 
@@ -363,9 +389,11 @@ router.post('/:id/message-stream', async (req, res) => {
       },
     });
 
+    clearInterval(heartbeatInterval);
     res.end();
   } catch (e) {
     console.error('[SSE] Error:', e.message);
+    clearInterval(heartbeatInterval);
     if (!res.destroyed) {
       sendSSE('error', { message: e.message });
       res.end();

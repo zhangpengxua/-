@@ -133,6 +133,95 @@ function useHandler(convs) {
   mock = installMockLLM(analysisHandlerFor(convs));
 }
 
+test('跨学科同义知识点归并后可出题、批改，并回流到同一知识点', async () => {
+  const taxonomy = require('../config/knowledgeTaxonomy');
+  const a = seedUserProblem({ stem: '在8位补码表示下，两个正整数相加为何可能得到负数？' });
+  const b = seedUserProblem({ stem: '解释带符号整数相加超出表示范围的判断规则。' });
+  let kpId;
+  if (mock) mock.restore();
+  mock = installMockLLM(({ messages, options }) => {
+    const input = JSON.parse(messages[0].content);
+    if (options.taskType === 'learning-classification') {
+      const existing = input.knowledgeTaxonomy.find((p) => p.name === '补码加法溢出判定');
+      if (existing) return JSON.stringify({ existingId: existing.id, reason: '同一补码溢出规则的不同表述' });
+      return JSON.stringify({ newPoint: { name: '补码加法溢出判定', path: ['计算机科学', '数据表示'], aliases: ['有符号加法溢出'], definition: '定长补码中两个同号数相加结果变号时发生溢出。', boundary: '区别于无符号加法的最高位进位。' }, reason: '现有数学目录未覆盖该规则' });
+    }
+    if (options.taskType === 'learning-analysis' && input.task === 'extract') {
+      return JSON.stringify({ problems: input.samples.map((s) => ({ problemId: s.problemId, knowledgePoints: [{ id: null, proposedName: s.questionText.includes('8位') ? '补码正数相加变号' : '有符号相加越界', evidenceRefs: input.evidence.filter((e) => e.conversationId === s.problemId).map((e) => e.id) }], difficulties: [] })) });
+    }
+    if (options.taskType === 'learning-analysis') {
+      kpId = input.batches[0].problems[0].knowledgePoints[0].id;
+      assert.ok(input.batches.every((batch) => batch.problems.every((p) => p.knowledgePoints[0].id === kpId)));
+      return JSON.stringify({ summary: '复习补码加法溢出规则。', knowledgePoints: [{ id: kpId, assessment: input.independentAttempts.length ? 'observed_error' : 'review_suggestion', evidenceRefs: input.evidence.map((e) => e.id), reason: '根据题目及独立作答分析。', reviewAdvice: '区分进位与溢出。', trainingGoal: '正确判断有符号溢出。' }] });
+    }
+    if (options.taskType === 'learning-practice') {
+      assert.equal(input.knowledgePoints[0].definition, taxonomy.getPoint(kpId).definition);
+      return JSON.stringify({ questions: [1, 2, 3].map((n) => ({ knowledgePointId: kpId, type: 'short_answer', stem: `训练${n}：请说明8位补码中两个正数相加的溢出判断依据。`, hints: ['观察结果符号。'], canonical: '两个正数相加结果为负数则溢出。', explanation: '定长补码超出最大正数时，结果的符号位可能变为1。', rubric: [{ id: 'r1', description: '正确区分结果符号与最高位进位', points: 1 }], targetSkill: 'direct_application' })) });
+    }
+    if (options.taskType === 'learning-review') {
+      assert.equal(input.questions[0].knowledgePoint.id, kpId);
+      return JSON.stringify({ reviews: [0, 1, 2].map((index) => ({ index, status: 'passed', issues: [] })) });
+    }
+    if (options.taskType === 'learning-grading') {
+      assert.equal(input.question.knowledgePoints[0].id, kpId);
+      return JSON.stringify({ verdict: 'incorrect', rubricScores: [{ rubricId: 'r1', score: 0 }], feedback: '混淆无符号进位与有符号溢出。', errorKnowledgePointIds: [kpId], confidence: 'high', needsReview: false });
+    }
+    throw new Error('unexpected task');
+  });
+  let seq = 0;
+  const jobResult = async (url, body) => {
+    const res = await jsonFetch(url, { method: 'POST', body: { ...body, requestKey: `adaptive-${++seq}` } });
+    assert.equal(res.status, 202, JSON.stringify(res.data));
+    let job;
+    assert.ok(await waitFor(async () => {
+      job = (await jsonFetch(`/jobs/${res.data.jobId}`)).data;
+      return ['completed', 'failed'].includes(job.status);
+    }));
+    assert.equal(job.status, 'completed', JSON.stringify(job.error));
+    return job.result;
+  };
+  const analyze = async (convs) => {
+    const result = await jobResult('/analyses', { conversationIds: convs.map((c) => c._id), forceRefresh: true, includePracticeResults: true });
+    return (await jsonFetch(`/analyses/${result.analysisId}`)).data;
+  };
+  const first = await analyze([a]);
+  const second = await analyze([b]);
+  assert.equal(first.knowledgePoints[0].id, second.knowledgePoints[0].id);
+  const combined = await analyze([a, b]);
+  assert.equal(combined.knowledgePoints.length, 1);
+  assert.equal(combined.knowledgePoints[0].unmapped, false);
+  assert.equal(combined.knowledgePoints[0].relatedProblemCount, 2);
+  const generated = await jobResult('/practice-sessions', { analysisId: combined.id, knowledgePointIds: [kpId], questionCount: 3, difficulty: 'basic' });
+  const session = (await jsonFetch(`/practice-sessions/${generated.sessionId}`)).data;
+  assert.equal(session.questions.length, 3);
+  await jobResult(`/practice-sessions/${session.id}/attempts`, { questionId: session.questions[0].id, answer: '最高位有进位就是有符号溢出', submissionKey: 'adaptive-answer' });
+  const updated = await analyze([a, b]);
+  assert.equal(updated.knowledgePoints[0].id, kpId);
+  assert.equal(updated.knowledgePoints[0].assessment, 'observed_error');
+  assert.equal(updated.knowledgePoints[0].performance.incorrect, 1);
+});
+
+test('empty initial candidates can regenerate using the originally selected knowledge points', async () => {
+  const conv = seedUserProblem({ stem: '求复合函数 y=sin(3x) 的导数并说明链式法则。' });
+  const analysis = await runAnalysisJob([conv]);
+  mock.restore();
+  const normal = analysisHandlerFor([conv]);
+  let generationCalls = 0;
+  mock = installMockLLM((args) => {
+    if (args.options.taskType === 'learning-practice') {
+      generationCalls++;
+      if (generationCalls === 1) return JSON.stringify({ questions: [] });
+      const payload = JSON.parse(args.messages[0].content);
+      assert.deepEqual(payload.knowledgePoints.map((kp) => kp.id), [KP]);
+      assert.deepEqual(payload.quota, [3]);
+    }
+    return normal(args);
+  });
+  const session = await createPracticeSession(analysis);
+  assert.equal(session.questions.length, 3);
+  assert.equal(generationCalls, 2);
+});
+
 async function jsonFetch(path, options = {}) {
   const res = await fetch(base + path, {
     headers: { 'Content-Type': 'application/json' },

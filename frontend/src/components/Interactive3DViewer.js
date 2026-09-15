@@ -1,6 +1,6 @@
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useState, useLayoutEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Line, Text } from '@react-three/drei';
+import { OrbitControls, Line, Text, Html, Bounds } from '@react-three/drei';
 import * as THREE from 'three';
 import { create, all } from 'mathjs';
 import { latexToMathJS } from '../utils/latexToMathJS';
@@ -82,7 +82,7 @@ function extractSurfaceInfo(description, drawingData, imageType) {
         info.exprW = p.exprW;
         info.paramU = p.paramU || ['u', 0, Math.PI * 2];
         info.paramV = p.paramV || ['v', 0, 1];
-        info.color = f.color || '#4d96ff';
+        info.color = f.color || '#58a8ae';
         info.opacity = f.opacity != null ? f.opacity : 0.7;
         break;
       }
@@ -306,7 +306,7 @@ function resolvePlaneRenderData(pl, pointLookup, defSize) {
     polygonUV = fromPoints.polygonUV;
   }
 
-  if (pl.boundary && !radius) {
+  if (pl.boundary && radius == null) {
     const r = parseDiskRadius(pl.boundary);
     if (r != null) radius = r;
   }
@@ -332,7 +332,7 @@ function resolvePlaneRenderData(pl, pointLookup, defSize) {
   const isDisk = pl.type === 'disk' || radius > 0;
 
   if (isDisk) {
-    if (!radius) {
+    if (radius == null) {
       const [uMin, uMax] = finalBounds[0];
       const [vMin, vMax] = finalBounds[1];
       radius = Math.max(uMax - uMin, vMax - vMin) / 2;
@@ -650,7 +650,7 @@ function parseGeometry(description) {
 // ============ Three.js 组件 ============
 
 /** 点线几何体 */
-function ThreeGeometry({ geoData }) {
+function ThreeGeometry({ geoData, showLabels = true, onInspect }) {
   const pointMap = useMemo(() => {
     const map = {};
     for (const pt of geoData.points) map[pt.name] = [pt.x, pt.y, pt.z];
@@ -665,13 +665,13 @@ function ThreeGeometry({ geoData }) {
     }).filter(Boolean),
   [geoData.lines, pointMap]);
 
-  const edgeColors = ['#ff6b6b', '#ffd93d', '#6bcb77', '#4d96ff', '#ff922b', '#cc5de8'];
-  const sphereColors = ['#ff4757', '#ff6348', '#ffa502', '#eccc68', '#7bed9f', '#70a1ff'];
+  const edgeColors = ['#25818b'];
+  const sphereColors = ['#087f8c'];
 
   return (
     <group>
       {linePairs.map(({ key, start, end }, idx) => (
-        <Line key={key} points={[start, end]} color={edgeColors[idx % edgeColors.length]} lineWidth={3} />
+        <Line key={key} points={[start, end]} color={edgeColors[idx % edgeColors.length]} lineWidth={1.7} />
       ))}
       {geoData.points.map((pt, idx) => (
         <group key={pt.name}>
@@ -679,9 +679,7 @@ function ThreeGeometry({ geoData }) {
             <sphereGeometry args={[0.12, 16, 16]} />
             <meshStandardMaterial color={sphereColors[idx % sphereColors.length]} />
           </mesh>
-          <Text position={[pt.x + 0.2, pt.z + 0.2, -pt.y + 0.2]} fontSize={0.28} color="#ffffff" fontWeight="bold">
-            {pt.name}
-          </Text>
+          {showLabels && <Html position={[pt.x, pt.z + 0.25, -pt.y]} center><button className="generated-point-label" onClick={()=>onInspect?.(`点 ${pt.name}（${pt.x}, ${pt.y}, ${pt.z}）`)}>{pt.name}</button></Html>}
         </group>
       ))}
     </group>
@@ -689,7 +687,7 @@ function ThreeGeometry({ geoData }) {
 }
 
 /** 显式曲面 z = f(x,y) — 用 mathjs 数值计算生成网格 */
-function ExplicitSurface({ equation, xRange, yRange, resolution = 40, color = '#4d96ff', opacity = 0.75 }) {
+function ExplicitSurface({ equation, xRange, yRange, resolution = 40, color = '#58a8ae', opacity = 0.38 }) {
   const meshRef = useRef();
   const zExpr = extractExplicitZExpr(equation);
   const compiled = useMemo(() => compileExpr(zExpr), [zExpr]);
@@ -800,7 +798,7 @@ function ImplicitSurface({ equation, xRange, yRange, zRange, resolution = 30 }) 
       <mesh>
         <sphereGeometry args={[r, 48, 48]} />
         <meshStandardMaterial
-          color="#4d96ff"
+          color="#58a8ae"
           transparent
           opacity={0.55}
           roughness={0.2}
@@ -831,7 +829,7 @@ function ImplicitSurface({ equation, xRange, yRange, zRange, resolution = 30 }) 
       <mesh rotation={rotation}>
         <cylinderGeometry args={[radius, radius, height, 48, 1, true]} />
         <meshStandardMaterial
-          color="#4d96ff"
+          color="#58a8ae"
           transparent
           opacity={0.35}
           roughness={0.3}
@@ -882,7 +880,7 @@ function ImplicitSurface({ equation, xRange, yRange, zRange, resolution = 30 }) 
   return (
     <mesh geometry={points}>
       <meshStandardMaterial
-        color="#4d96ff"
+        color="#58a8ae"
         side={THREE.DoubleSide}
         transparent
         opacity={0.7}
@@ -894,7 +892,7 @@ function ImplicitSurface({ equation, xRange, yRange, zRange, resolution = 30 }) 
 }
 
 /** 参数曲面：x=f(u,v), y=g(u,v), z=h(u,v) — 用 mathjs 数值计算 */
-function ParametricSurface({ exprU, exprV, exprW, paramU, paramV, color = '#4d96ff', opacity = 0.7 }) {
+function ParametricSurface({ exprU, exprV, exprW, paramU, paramV, color = '#58a8ae', opacity = 0.38 }) {
   const [uName, uMin, uMax] = parseParamRange(paramU, 'u', 0, Math.PI * 2);
   const [vName, vMin, vMax] = parseParamRange(paramV, 'v', 0, 1);
   const res = 40;
@@ -975,7 +973,7 @@ function ParametricSurface({ exprU, exprV, exprW, paramU, paramV, color = '#4d96
 
 /** 生成有边界的平面网格（矩形面片 / 多边形面片 + 边缘线框） */
 function BoundedPlaneMesh({ normal, point, bounds, polygonUV, idx }) {
-  const colors = ['#4d96ff', '#ff6b6b', '#6bcb77', '#ffd93d', '#ce93d8', '#ff8a65'];
+  const colors = ['#25818b', '#d39b32', '#697bb0', '#699766', '#b47889', '#b98654'];
 
   return useMemo(() => {
     if (!normal || !point) return null;
@@ -1107,8 +1105,8 @@ function BoundedPlaneMesh({ normal, point, bounds, polygonUV, idx }) {
 }
 
 /** 圆盘面片（圆台上下底面等） */
-function BoundedDiskMesh({ normal, point, radius, idx, color, opacity = 0.35 }) {
-  const colors = ['#4d96ff', '#ff6b6b', '#6bcb77', '#ffd93d', '#ce93d8', '#ff8a65'];
+function BoundedDiskMesh({ normal, point, radius, idx, color, opacity = 0.35, interactive = false }) {
+  const colors = ['#25818b', '#d39b32', '#697bb0', '#699766', '#b47889', '#b98654'];
 
   const geometry = useMemo(() => {
     if (!normal || !point || !radius) return null;
@@ -1141,21 +1139,25 @@ function BoundedDiskMesh({ normal, point, radius, idx, color, opacity = 0.35 }) 
     return geo;
   }, [normal, point, radius]);
 
+  const outline = useMemo(() => geometry ? Array.from({length:49},(_,i)=>{
+    const pos=geometry.attributes.position;return [pos.getX(i+1),pos.getY(i+1),pos.getZ(i+1)];
+  }) : [],[geometry]);
   if (!geometry) return null;
   const matColor = color || colors[(idx || 0) % colors.length];
 
   return (
-    <mesh geometry={geometry}>
+    <group><mesh geometry={geometry}>
       <meshStandardMaterial
-        color={matColor}
+        color={interactive ? '#f8ce67' : matColor}
+        userData={{ preserveOpacity: interactive }}
         transparent
-        opacity={opacity}
+        opacity={interactive ? 0.7 : opacity}
         side={THREE.DoubleSide}
         roughness={0.4}
         metalness={0.05}
         depthWrite={false}
       />
-    </mesh>
+    </mesh>{interactive && <Line points={outline} color="#e5a325" lineWidth={2}/>}</group>
   );
 }
 
@@ -1179,6 +1181,7 @@ function PlaneEntry({ pl, idx, pointLookup, defSize }) {
   if (resolved.kind === 'disk') {
     return (
       <BoundedDiskMesh
+        interactive={pl.interactive}
         key={idx}
         normal={resolved.normal}
         point={resolved.point}
@@ -1222,7 +1225,7 @@ function ThreePlanes({ planes, defaultBounds, pointLookup = {} }) {
 function ThreeFunctions({ functions, defaultXRange, defaultYRange, defaultZRange }) {
   if (!functions || functions.length === 0) return null;
 
-  const colors = ['#4d96ff', '#ff6b6b', '#6bcb77', '#ffd93d', '#ce93d8', '#ff8a65'];
+  const colors = ['#25818b', '#d39b32', '#697bb0', '#699766', '#b47889', '#b98654'];
 
   return (
     <group>
@@ -1233,7 +1236,7 @@ function ThreeFunctions({ functions, defaultXRange, defaultYRange, defaultZRange
         const yRange = func.yRange || defaultYRange || [-3, 3];
         const zRange = func.zRange || defaultZRange || [-3, 3];
         const color = func.color || colors[idx % colors.length];
-        const opacity = func.opacity != null ? func.opacity : 0.7;
+        const opacity = func.opacity != null ? Math.min(func.opacity, 0.5) : 0.38;
         const resolution = func.resolution || 40;
 
         // 参数曲面：有 exprU+exprV 即渲染（不依赖 type 字段是否准确）
@@ -1295,12 +1298,12 @@ function Axes() {
   const LABEL_OFFSET = 0.8;
   return (
     <group>
-      <Line points={[[0,0,0],[5,0,0]]} color="#ff4444" lineWidth={2} />
-      <Text position={[5.3, LABEL_OFFSET, 0]} fontSize={0.4} color="#ff4444" fontWeight="bold">X</Text>
-      <Line points={[[0,0,0],[0,0,-5]]} color="#44ff44" lineWidth={2} />
-      <Text position={[0, LABEL_OFFSET, -5.3]} fontSize={0.4} color="#44ff44" fontWeight="bold">Y</Text>
-      <Line points={[[0,0,0],[0,5,0]]} color="#4488ff" lineWidth={2} />
-      <Text position={[0, 5.3, 0]} fontSize={0.4} color="#4488ff" fontWeight="bold">Z</Text>
+      <Line points={[[0,0,0],[5,0,0]]} color="#bb766b" lineWidth={2} />
+      <Text position={[5.3, LABEL_OFFSET, 0]} fontSize={0.4} color="#bb766b" fontWeight="bold">X</Text>
+      <Line points={[[0,0,0],[0,0,-5]]} color="#699766" lineWidth={2} />
+      <Text position={[0, LABEL_OFFSET, -5.3]} fontSize={0.4} color="#699766" fontWeight="bold">Y</Text>
+      <Line points={[[0,0,0],[0,5,0]]} color="#638eaa" lineWidth={2} />
+      <Text position={[0, 5.3, 0]} fontSize={0.4} color="#638eaa" fontWeight="bold">Z</Text>
     </group>
   );
 }
@@ -1310,9 +1313,9 @@ function GridPlane() {
     <group>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]}>
         <planeGeometry args={[20, 20]} />
-        <meshBasicMaterial color="#2a2a4a" side={2} transparent opacity={0.3} />
+        <meshBasicMaterial color="#e1e8ec" side={2} transparent opacity={0.3} />
       </mesh>
-      <gridHelper args={[20, 20, '#444', '#333']} />
+      <gridHelper args={[24, 24, '#dce6e7', '#e8eeee']} />
     </group>
   );
 }
@@ -1330,7 +1333,23 @@ function AutoRotate({ children, speed = 0.003 }) {
 
 // ============ 主组件 ============
 
-const Interactive3DViewer = ({ description, drawingData, imageType }) => {
+function SurfaceOpacity({ opacity, children }) {
+  const ref = useRef();
+  useLayoutEffect(() => {
+    ref.current?.traverse((object) => {
+      if (!object.isMesh) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      materials.forEach((material) => {
+        if (material?.transparent && !material.userData?.preserveOpacity) { material.opacity = opacity; material.depthWrite = false; }
+      });
+    });
+  }, [opacity, children]);
+  return <group ref={ref}>{children}</group>;
+}
+
+const Interactive3DViewer = ({ description, drawingData, imageType, onAsk }) => {
+ const [showGrid,setShowGrid]=useState(true),[showLabels,setShowLabels]=useState(true),[showSurfaces,setShowSurfaces]=useState(true),[selected,setSelected]=useState('');
+ const [opacity,setOpacity]=useState(0.3);
   const surfaceInfo = useMemo(() => extractSurfaceInfo(description, drawingData, imageType), [description, drawingData, imageType]);
 
   const geoData = useMemo(() => {
@@ -1382,10 +1401,10 @@ const Interactive3DViewer = ({ description, drawingData, imageType }) => {
         width: '100%', maxWidth: '700px', margin: '16px auto',
         borderRadius: '12px', overflow: 'hidden',
         boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
-        backgroundColor: '#1a1a2e', padding: '32px',
+        backgroundColor: '#f5f8f8', padding: '32px',
         textAlign: 'center', color: '#888',
       }}>
-        <p style={{ color: '#ff6b6b', fontWeight: 600 }}>Not enough 3D geometry data</p>
+        <p style={{ color: '#ff6b6b', fontWeight: 600 }}>这一步的图形数据不完整，请继续阅读解答或追问。</p>
         <p style={{ fontSize: '12px', marginTop: '8px', wordBreak: 'break-all' }}>
           {description?.substring(0, 300)}
         </p>
@@ -1395,21 +1414,22 @@ const Interactive3DViewer = ({ description, drawingData, imageType }) => {
 
   return (
     <div style={{
-      width: '100%', maxWidth: '700px', height: '520px',
-      margin: '16px auto', borderRadius: '12px', overflow: 'hidden',
-      boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+      width: '100%', height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column',
+      margin: 0, borderRadius: 0, overflow: 'hidden',
+      background: '#f5f8f8',
     }}>
-      <Canvas camera={{ position: [7, 5, -7], fov: 55 }} style={{ background: '#1a1a2e' }}>
-        <ambientLight intensity={0.5} />
-        <directionalLight position={[8, 10, 4]} intensity={1.0} />
+      <div className="generated-scene-toolbar"><span>观察设置</span><button aria-pressed={showGrid} onClick={()=>setShowGrid(!showGrid)}>网格</button><button aria-pressed={showLabels} onClick={()=>setShowLabels(!showLabels)}>标注</button><button aria-pressed={showSurfaces} onClick={()=>setShowSurfaces(!showSurfaces)}>曲面</button></div>
+      <Canvas camera={{ position: [8, 6.2, 10], fov: 40 }} style={{ background: '#f5f8f8', flex: 1, minHeight: 0 }}><color attach="background" args={['#f5f8f8']}/>
+        <ambientLight intensity={1.8} />
+        <directionalLight position={[8, 10, 4]} intensity={2} />
         <directionalLight position={[-4, -2, -4]} intensity={0.4} />
-        <GridPlane />
-        <Axes />
+        {showGrid && <GridPlane />}
+        {showLabels && <Axes />}
 
-        {/* 所有 3D 元素 */}
-        <>
+        {/* 依据实际几何范围自动构图。 */}
+        <Bounds fit clip observe margin={1.3}><SurfaceOpacity opacity={opacity}>
           {/* 显式曲面 */}
-          {hasSurfaceEquation && surfaceInfo.type === 'explicit' && (
+          {showSurfaces && hasSurfaceEquation && surfaceInfo.type === 'explicit' && (
             <ExplicitSurface
               equation={surfaceInfo.equation}
               xRange={surfaceInfo.xRange}
@@ -1428,7 +1448,7 @@ const Interactive3DViewer = ({ description, drawingData, imageType }) => {
             />
           )}
           {/* 单参数曲面 */}
-          {isParametric && (
+          {showSurfaces && isParametric && (
             <ParametricSurface
               exprU={surfaceInfo.exprU}
               exprV={surfaceInfo.exprV}
@@ -1440,28 +1460,22 @@ const Interactive3DViewer = ({ description, drawingData, imageType }) => {
             />
           )}
           {/* 点线几何体 */}
-          <ThreeGeometry geoData={geoData} />
+          <ThreeGeometry geoData={geoData} showLabels={showLabels} onInspect={setSelected} />
           {/* 平面（底面/顶面） */}
-          <ThreePlanes planes={drawingData?.planes || geoData?.planes} defaultBounds={surfaceInfo.xRange} pointLookup={pointLookup} />
+          {showSurfaces && <ThreePlanes planes={drawingData?.planes || geoData?.planes} defaultBounds={surfaceInfo.xRange} pointLookup={pointLookup} />}
           {/* 多函数渲染（含参数曲面） */}
-          <ThreeFunctions
+          {showSurfaces && <ThreeFunctions
             functions={drawingData?.functions || geoData?.functions}
             defaultXRange={surfaceInfo.xRange}
             defaultYRange={surfaceInfo.yRange}
             defaultZRange={surfaceInfo.zRange}
-          />
-        </>
+          />}
+        </SurfaceOpacity></Bounds>
 
-        <OrbitControls enableDamping dampingFactor={0.1} minDistance={2} maxDistance={30} target={[0, 0, 0]} />
+        <OrbitControls makeDefault enableDamping dampingFactor={0.1} />
       </Canvas>
-      <div style={{
-        padding: '10px 16px', backgroundColor: '#111122',
-        borderTop: '1px solid #2a2a4a', color: '#aaa', fontSize: '13px',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-      }}>
-        <span>Drag to rotate | Scroll to zoom | Right-drag to pan</span>
-        {(hasSurfaceEquation || hasFunctions) && <span style={{ color: '#4d96ff', fontSize: '11px' }}>Numerical rendering (mathjs)</span>}
-      </div>
+      <label className="generated-opacity">表面透明度<input aria-label="表面透明度" type="range" min="0.1" max="0.8" step="0.05" value={1-opacity} onChange={e=>setOpacity(1-Number(e.target.value))}/><span>{Math.round((1-opacity)*100)}%</span></label>
+      <div className="generated-scene-footer">{selected ? <><span>{selected}</span>{onAsk && <button onClick={()=>onAsk(`请解释${selected}在当前步骤中的作用。`)}>针对这里追问</button>}</> : <span>拖动旋转 · 滚轮缩放 · 点击标注探索</span>}</div>
     </div>
   );
 };

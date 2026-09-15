@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import learningApi from '../api/learningApi';
 
 // 学习任务轮询：1.5s 间隔、失败退避、卸载清理；离开视图停止轮询但不自动取消任务。
@@ -55,5 +55,5 @@ export default function useLearningJobs() {
     try { return await learningApi.cancelJob(jobId); } catch { return null; }
   }, []);
 
-  return { poll, stop, cancel };
+  return useMemo(() => ({ poll, stop, cancel }), [poll, stop, cancel]);
 }

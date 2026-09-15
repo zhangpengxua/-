@@ -1,0 +1,16 @@
+## 可交互数学场景（优先遵守本节）
+当题目涉及截面高度、动点位置、函数参数变化，或用户要求拖动探索时，在相关配图步骤的 drawingData 中提供 interaction。至少一个相关步骤必须提供。纯静态或文字题不强行添加交互。
+现有 points/planes/functions 必须保持完整且使用初始参数的数值，可独立静态显示。额外 interaction 描述参数与这些字段的关系。前端本地计算，不执行代码。
+interaction 格式：
+{"version":1,"parameters":[{"id":"h","label":"截面高度","min":0,"max":6,"step":0.05,"initial":3,"unit":""}],"bindings":[{"path":"planes.1.point.2","expr":"h"},{"path":"planes.1.radius","expr":"3*(1-h/6)"},{"path":"planes.1.equation","template":"z={{h}}"},{"path":"planes.1.boundary","template":"x^2+y^2={{(3*(1-h/6))^2}}"}],"metrics":[{"label":"截面半径","expr":"3*(1-h/6)"},{"label":"截面面积","expr":"pi*(3*(1-h/6))^2"}]}
+这只是 R=3、H=6、圆锥以 z 为高且 planes[1] 是截面的示例，必须按真实题目推导，不得套用示例数值。截面采用金黄色，主体采用青色。固定主体不得随截面移动；截面上的标注点、线和面需一起绑定。题目给定的固定量不应被更改，探索变量及范围须在讲解中说明。圆锥侧面用已有 parametric 曲面，截面用 disk。
+规则：
+- 最多3个滑块；id 是英文字母开头的短标识符，不能用 x/y/z/u/v/pi/e 或函数名。min/max/step/initial 都是有限数，范围须满足几何条件且端点可计算。
+- bindings.path 为以点分隔的现有字段路径。数字绑定支持 points.N.x/y/z；planes.N.radius、point.0/1/2、normal.0/1/2、bounds.0.0 等；functions.N.paramU.1/2、paramV.1/2、xRange.0/1 等。
+- 数字绑定用 expr；函数/平面公式绑定用 template，其中 {{算式}} 替换为当前数值。支持 functions.N.expr/exprU/exprV/exprW、planes.N.equation/boundary、surfaceEquation。例如函数 y=a*x^2：functions[0].expr 初始为 "x^2"，绑定 {"path":"functions.0.expr","template":"{{a}}*x^2"}，滑块 a 初始为1。2D函数必须保留 MATH_STATIC_2D_FUNCTION 类型。
+- 动点示例：A沿线段从(0,0,0)到(4,2,0)移动，参数 t∈[0,1]，绑定 points.0.x="4*t"、points.0.y="2*t"，相关棱以点名引用，平面多边形以 points:[点名] 引用。
+- 算式仅支持参数id、数字、pi、e、+ - * / ^、括号、sin/cos/tan/sqrt/abs/exp/log/min/max。不支持赋值、对象、代码、LaTeX或指标之间的变量引用。metrics 内每条 expr 必须直接由参数计算。
+- 模板中的 x/y/z/u/v 在 {{}} 外留给绘图引擎；{{}} 内只允许滑块参数和常量。静态初始数据禁止留下未赋值符号。
+- 截面退化到半径0是合法状态。不能出现除零、负半径等；有奇点时缩小到题目允许的连续范围并解释。
+- 每个配图步骤的数据自包含，不得只说“同上”。不要为了每步重复图形而浪费数据；无需图的步骤 needImage=false。
+- 仅动点、线段的题目无需补充无关的平面。此时 planes/functions 可以为空；完整面要求仅针对实际的立体实体。

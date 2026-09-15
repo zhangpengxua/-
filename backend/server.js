@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { execSync } = require('child_process');
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 const conversationRoutes = require('./routes/conversations');
 const learningRoutes = require('./routes/learning');

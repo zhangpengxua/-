@@ -10,7 +10,7 @@ export default function WeaknessReport({
   onUpdateAnalysis, updateJob, pendingEvidence,
   selectedKpIds, onToggleKp, onOpenPracticeSetup, onOpenProblem,
 }) {
-  if (loading) return <div role="status" className="pane-status">正在加载分析报告…</div>;
+  if (loading) return <div role="status" className="pane-status">正在加载报告并统一知识点分类…</div>;
   if (error) return <div role="alert" className="pane-error">{error}</div>;
   if (!report) {
     return (
@@ -22,7 +22,6 @@ export default function WeaknessReport({
   }
 
   const stats = report.stats || {};
-  const selectable = (report.knowledgePoints || []).filter((kp) => !kp.unmapped);
 
   return (
     <div className="report-pane">
@@ -70,15 +69,17 @@ export default function WeaknessReport({
       <div className="kp-grid">
         {report.knowledgePoints.map((kp) => {
           const badge = ASSESSMENT_LABELS[kp.assessment] || { text: kp.assessment, tone: 'muted' };
-          const checked = selectedKpIds.includes(kp.id || kp.proposedName);
-          const selectableKp = !kp.unmapped && !report.stale;
+          const checked = selectedKpIds.includes(kp.id);
+          const selectableKp = Boolean(kp.id) && !report.stale;
           return (
             <article className={`kp-card ${checked ? 'kp-selected' : ''}`} key={kp.id || kp.proposedName}>
               <header className="kp-head">
-                <h3><MathMarkdown>{kp.unmapped ? `${kp.name}（暂未归类）` : kp.name}</MathMarkdown></h3>
+                <h3><MathMarkdown>{kp.name}</MathMarkdown></h3>
                 <span className={`badge tone-${badge.tone}`}>{badge.text}</span>
               </header>
               {kp.path && <p className="kp-path">{kp.path.join(' → ')}</p>}
+              {kp.definition && <p className="kp-advice"><strong>知识点：</strong>{kp.definition}</p>}
+              {kp.difficultySignals?.length > 0 && <p className="kp-reason"><strong>具体困难：</strong>{kp.difficultySignals.join('；')}</p>}
               <div className="kp-chips">
                 <span className="chip-sm">{LEVEL_LABELS[kp.evidenceLevel] || kp.evidenceLevel}</span>
                 <span className={`chip-sm prio-${kp.priority}`}>{PRIORITY_LABELS[kp.priority] || kp.priority}</span>
@@ -98,7 +99,7 @@ export default function WeaknessReport({
                   disabled={!selectableKp}
                   onChange={() => onToggleKp(kp.id)}
                 />
-                {kp.unmapped ? '暂未归类，不能生成训练' : (report.stale ? '分析已过期，先更新再训练' : '选入专项训练')}
+                {report.stale ? '分析已过期，先更新再训练' : '选入专项训练'}
               </label>
             </article>
           );

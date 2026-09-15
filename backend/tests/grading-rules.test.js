@@ -35,6 +35,12 @@ test('单选题：后端比较选项 ID，不调用模型', () => {
   assert.equal(wrong.score, 0);
 });
 
+test('跨学科填空不套用数学忽略大小写和空白的判题规则', () => {
+  const q = makeQuestion({ type: 'fill_blank', knowledgePointIds: ['kp.code'],
+    privateAnswer: { canonical: 'UserName', acceptedVariants: [], maxScore: 1 } });
+  assert.equal(gradingService.ruleGrade(q, 'username'), null);
+});
+
 test('填空题：保守规范化等价（全角/空白/比值与分数/小数）', () => {
   const q = makeQuestion({
     type: 'fill_blank',

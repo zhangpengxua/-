@@ -1,0 +1,66 @@
+{
+  "name": "immersive-learning-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "个性化交互学习助手",
+  "author": "EL",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "desktop": "install-electron && electron .",
+    "build:desktop": "node desktop/build.cjs"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "mongoose": "^8.1.1",
+    "axios": "^1.6.7",
+    "dotenv": "^16.4.1",
+    "multer": "^1.4.5-lts.1"
+  },
+  "devDependencies": {
+    "electron": "44.3.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "cn.el.learning.desktop",
+    "productName": "EL学习助手",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "desktop/main.cjs",
+      "desktop/preload.cjs",
+      "desktop/settings.html",
+      "desktop/settings.js",
+      "backend/**/*.js",
+      "backend/prompts/*.txt",
+      "frontend/build/**/*",
+      "frontend/src/utils/parameterScene.mjs",
+      "package.json",
+      "!backend/tests/**/*",
+      "!backend/node_modules/**/*",
+      "!**/.env",
+      "!**/.env.*",
+      "!backend/data/**/*",
+      "!**/*.map",
+      "desktop/icon.ico"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false,
+      "icon": "desktop/icon.ico"
+    },
+    "portable": {
+      "artifactName": "EL-Learning-1.0.0-x64.exe"
+    },
+    "npmRebuild": false
+  }
+}

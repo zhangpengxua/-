@@ -9,8 +9,9 @@ const validators = require('../validators/learningSchemas');
 const evidenceService = require('./historyEvidenceService');
 const conversationRepository = require('../repositories/conversationRepository');
 const learningRepository = require('../repositories/learningRepository');
+const knowledgeResolution = require('./knowledgeResolutionService');
 
-const PROMPT_VERSION = 'analysis-v1';
+const PROMPT_VERSION = 'analysis-v2';
 const ANALYSIS_PROMPT = fs.readFileSync(path.join(__dirname, '..', 'prompts', 'learning-analysis.txt'), 'utf8');
 
 const BATCH_LIMITS = {
@@ -117,14 +118,24 @@ async function extractBatch(ctx, batchSamples, evidenceTable) {
       },
     }),
   }];
-  const value = await callModelWithRepair(ctx, ANALYSIS_PROMPT, messages, (v) => validators.validateBatchExtraction(v, batchSamples, evidenceIds), 'learning-analysis');
-  learningRepository.putBatchResult(cacheKey, value);
-  return value;
+  const value = await callModelWithRepair(ctx, ANALYSIS_PROMPT, messages, (v) => {
+    const check = validators.validateBatchExtraction(v, batchSamples, evidenceIds);
+    if (!check.ok) return check;
+    if (batchSamples.some((s) => !check.value.problems.some((p) => p.problemId === s.problemId && p.knowledgePoints.length))) {
+      return { ok: false, errors: ['每道题必须识别至少一个实际知识点；目录不覆盖时提供 proposedName，不得遗漏题目'] };
+    }
+    return check;
+  }, 'learning-analysis');
+  const resolved = await knowledgeResolution.resolveBatch(ctx, value, batchSamples, evidenceTable);
+  learningRepository.putBatchResult(cacheKey, resolved);
+  return resolved;
 }
 
 async function summarizeBatches(ctx, { batchResults, samples, evidenceTable, attemptRows, stats }) {
   const evidenceIds = new Set(evidenceTable.map((e) => e.id));
-  const validKpIds = new Set(taxonomy.points.map((p) => p.id));
+  const validKpIds = new Set(batchResults.flatMap((batch) => batch.problems.flatMap((p) => [
+    ...p.knowledgePoints.map((kp) => kp.id), ...p.difficulties.map((d) => d.knowledgePointId),
+  ])).concat(attemptRows.flatMap((r) => r.knowledgePointIds)));
   const messages = [{
     role: 'user',
     content: JSON.stringify({
@@ -148,7 +159,14 @@ async function summarizeBatches(ctx, { batchResults, samples, evidenceTable, att
       },
     }),
   }];
-  const value = await callModelWithRepair(ctx, ANALYSIS_PROMPT, messages, (v) => validators.validateSummaryOutput(v, evidenceIds, validKpIds), 'learning-analysis');
+  const value = await callModelWithRepair(ctx, ANALYSIS_PROMPT, messages, (v) => {
+    const check = validators.validateSummaryOutput(v, evidenceIds, validKpIds);
+    if (!check.ok) return check;
+    if (check.value.knowledgePoints.some((kp) => !kp.id)) return { ok: false, errors: ['归类已完成，汇总只能复用分批结果的知识点 ID，不得再提出新名称'] };
+    const missing = [...validKpIds].filter((id) => !check.value.knowledgePoints.some((kp) => kp.id === id));
+    if (missing.length) return { ok: false, errors: [`请覆盖已识别知识点：${missing.join('、')}。缺少学习表现证据时标记 review_suggestion 或 insufficient_evidence，不要遗漏`] };
+    return check;
+  }, 'learning-analysis');
   return value;
 }
 
@@ -198,7 +216,8 @@ function applyEvidenceRules({ summaryKps, batchResults, samples, evidenceTable, 
 
     const relatedProblems = new Set([...(problemsByKp.get(key) || [])].filter((p) => !dedupExcluded.has(p)));
     const relatedProblemCount = relatedProblems.size;
-    const kpAttempts = kp.id ? attemptRows.filter((r) => r.knowledgePointIds.includes(kp.id)) : [];
+    const kpAttempts = kp.id ? attemptRows.filter((r) => r.knowledgePointIds.includes(kp.id) &&
+      (r.verdict === 'correct' || !r.errorKnowledgePointIds || r.errorKnowledgePointIds.includes(kp.id))) : [];
     const performance = {
       independent: kpAttempts.length,
       correct: kpAttempts.filter((r) => r.verdict === 'correct').length,
@@ -237,6 +256,11 @@ function applyEvidenceRules({ summaryKps, batchResults, samples, evidenceTable, 
       unmapped: !kp.id,
       name: meta ? meta.name : kp.proposedName,
       path: meta ? meta.path : null,
+      definition: meta?.definition || '',
+      boundary: meta?.boundary || '',
+      difficultySignals: [...new Set(batchResults.flatMap((b) => b.problems.flatMap((p) => p.difficulties
+        .filter((d) => d.knowledgePointId === kp.id && d.strength === 'explicit_confusion')
+        .map((d) => d.description))).concat(kpAttempts.filter((r) => r.verdict !== 'correct').map((r) => r.feedback)).filter(Boolean))],
       assessment,
       evidenceLevel,
       priority: 'low',
@@ -310,6 +334,7 @@ async function runAnalysis(ctx, params) {
           attemptId: attempt.id,
           sessionId: session.id,
           knowledgePointIds: question.knowledgePointIds,
+          errorKnowledgePointIds: attempt.result.errorKnowledgePointIds || [],
           knowledgePointNames: question.knowledgePointIds.map((id) => taxonomy.getPoint(id)?.name || id),
           verdict: attempt.result.verdict,
           score: attempt.result.score,
@@ -340,7 +365,7 @@ async function runAnalysis(ctx, params) {
 
   if (!params.forceRefresh) {
     const cached = learningRepository.findCachedAnalysis(fingerprint);
-    if (cached) return { analysisId: cached.id, cached: true };
+    if (cached && cached.knowledgePoints.every((kp) => kp.id && taxonomy.isValidId(kp.id))) return { analysisId: cached.id, cached: true };
   }
 
   if (stats.deduplicatedProblems === 0) {

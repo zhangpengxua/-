@@ -9,7 +9,7 @@ export default function PracticeSetup({ selectedKpNames, count, difficulty, onCo
     return (
       <div className="setup-card" role="status">
         <div className="job-bar"><span className="job-text">{job.stageText}</span><button onClick={onCancel}>停止</button></div>
-        <p className="setup-note">生成后会逐题复核数学正确性，未全部通过的题目会触发一次补生成；仍失败则整组失败。</p>
+        <p className="setup-note">生成后会按知识点所属学科逐题复核，未全部通过的题目会触发一次补生成；仍失败则整组失败。</p>
       </div>
     );
   }

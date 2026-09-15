@@ -13,6 +13,7 @@ __pycache__/
 
 # ===== 临时文件 =====
 backend/tmp/
+backend/data/
 backend/temp_figure.py
 *.tmp
 /项目成果截图与PPT文案.zip

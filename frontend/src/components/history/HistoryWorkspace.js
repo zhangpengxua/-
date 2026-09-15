@@ -94,20 +94,37 @@ export default function HistoryWorkspace({ currentId, onOpenProblem, onDeletePro
     }
   }, []);
 
-  const loadReport = useCallback(async (id) => {
+  const loadReport = useCallback(async (id, { allowClassification = true } = {}) => {
     setReportLoading(true);
     setReportError('');
+    let classifying = false;
     try {
       const data = await learningApi.getAnalysis(id);
+      if (data.knowledgePoints?.some((kp) => !kp.id || kp.unmapped)) {
+        if (!allowClassification) throw new Error('知识点升级尚未完成，请确认后端已重启为新版本后重新分析。');
+        const res = await learningApi.createAnalysis({
+          conversationIds: data.scope.conversationIds, includePracticeResults: true,
+          forceRefresh: true, requestKey: `classify-${data.id}`,
+        });
+        classifying = true;
+        setReport(null);
+        jobs.poll(res.jobId, {
+          onCompleted: async (job) => { await loadAnalysesList(); await loadReport(job.result.analysisId, { allowClassification: false }); },
+          onFailed: (job) => { setReportLoading(false); setReportError(job.error?.message || '知识点归并失败，请重新分析记录'); },
+          onCancelled: () => { setReportLoading(false); setReportError('知识点归并已取消，可重新分析记录'); },
+        });
+        return;
+      }
       setReport(data);
+      setSelectedKpIds([]);
       setPendingEvidence(Boolean(data.pendingEvidence?.hasNew));
     } catch (e) {
       setReportError(e.code === 'NOT_FOUND' ? '分析报告不存在或已过期（服务重启会清空）。' : e.message);
       setReport(null);
     } finally {
-      setReportLoading(false);
+      if (!classifying) setReportLoading(false);
     }
-  }, []);
+  }, [jobs, loadAnalysesList]);
 
   const loadSessionList = useCallback(async () => {
     try {
@@ -134,12 +151,21 @@ export default function HistoryWorkspace({ currentId, onOpenProblem, onDeletePro
   }
 
   useEffect(() => { loadRecords(30); }, []);
-  useEffect(() => { loadAnalysesList(); loadSessionList(); }, []);
+  useEffect(() => {
+    let active = true;
+    const seq = requestSeq.current;
+    loadAnalysesList().then((items) => {
+      if (active && seq === requestSeq.current && items.length) loadReport(items[0].id);
+    });
+    loadSessionList();
+    return () => { active = false; };
+  }, [loadAnalysesList, loadReport, loadSessionList]);
 
   // ==================== 分析任务 ====================
 
   const startAnalysis = useCallback(async ({ conversationIds, forceRefresh }) => {
     const seq = ++requestSeq.current;
+    setReportError('');
     setAnalysisJob({ stageText: '正在创建分析任务…' });
     try {
       const res = await learningApi.createAnalysis({
@@ -191,6 +217,7 @@ export default function HistoryWorkspace({ currentId, onOpenProblem, onDeletePro
     if (!report) return;
     setTab('analysis');
     const seq = ++requestSeq.current;
+    setReportError('');
     setUpdateJob({ stageText: '正在更新分析…' });
     try {
       const res = await learningApi.createAnalysis({
@@ -228,6 +255,7 @@ export default function HistoryWorkspace({ currentId, onOpenProblem, onDeletePro
     setTab('practice');
     setShowResult(false);
     const seq = requestSeq.current;
+    setReportError('');
     setPracticeJob({ stageText: '正在创建训练任务…' });
     try {
       const res = await learningApi.createPractice({
@@ -350,6 +378,7 @@ export default function HistoryWorkspace({ currentId, onOpenProblem, onDeletePro
       </div>
 
       <div className="history-body">
+        {reportError && <div role="alert" className="pane-error">{reportError} <button className="text-button" onClick={() => setReportError('')}>关闭</button></div>}
         {tab === 'records' && (
           <HistoryRecordList
             records={records}
@@ -371,11 +400,10 @@ export default function HistoryWorkspace({ currentId, onOpenProblem, onDeletePro
 
         {tab === 'analysis' && (
           <>
-            {reportError && <div role="alert" className="pane-error">{reportError} <button className="text-button" onClick={() => setReportError('')}>关闭</button></div>}
             <WeaknessReport
               report={report}
               loading={reportLoading}
-              error={reportError && !report ? reportError : ''}
+              error=""
               analysesList={analysesList}
               onSelectReport={(id) => loadReport(id)}
               onUpdateAnalysis={updateAnalysis}

@@ -90,11 +90,12 @@ test('完全重复题合并计数但保留来源；AI 失败解答只作主题�
   assert.ok(samples[0].warnings.includes('assistant_generation_failed'));
 });
 
-test('非数学内容被排除；超长题干被排除', () => {
+test('跨学科学习内容可分析；超长题干仍被排除', () => {
   const english = seedConv([{ role: 'user', content: '帮我翻译这段英语阅读理解。', kind: 'question', source: 'user_problem' }]);
   const long = seedConv([{ role: 'user', content: 'x'.repeat(8001), kind: 'question', source: 'user_problem' }]);
-  const { exclusions } = evidenceService.buildLearningSamples([english, long]);
-  assert.ok(exclusions.some((e) => e.reason === 'non_math'));
+  const { exclusions, samples } = evidenceService.buildLearningSamples([english, long]);
+  assert.equal(samples.length, 1);
+  assert.equal(samples[0].problemId, english._id);
   assert.ok(exclusions.some((e) => e.reason === 'too_long'));
 });
 
